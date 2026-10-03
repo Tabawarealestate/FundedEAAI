@@ -12,6 +12,7 @@
 //--- Include All Modular Engines
 #include <FundedAI/Core/Constants.mqh>
 #include <FundedAI/Core/Types.mqh>
+#include <FundedAI/Core/StatePersist.mqh>
 #include <FundedAI/Challenge/ChallengeProfile.mqh>
 #include <FundedAI/Challenge/ChallengeGuard.mqh>
 #include <FundedAI/Risk/PositionSizer.mqh>
@@ -51,6 +52,7 @@ input double                 Inp_MaxPortfolioRisk    = 2.0;                     
 input string                 Inp_Section3            = "=== TIMEFRAMES & STRATEGY ===";// --- TIMEFRAMES ---
 input ENUM_TIMEFRAMES        Inp_HTFTimeframe        = PERIOD_H4;                  // Higher Timeframe Trend Bias
 input ENUM_TIMEFRAMES        Inp_LTFTimeframe        = PERIOD_M15;                 // Lower Timeframe Entry
+input int                    Inp_GMTOffsetHours      = 2;                          // Broker Server GMT Offset (Hours)
 
 input string                 Inp_Section4            = "=== SAFETIES & SPREAD ==="; // --- SAFETY & EXECUTION ---
 input int                    Inp_MaxSpreadPoints     = 30;                         // Max Allowed Spread (Points)
@@ -72,6 +74,7 @@ CDashboardPanel     g_dashboard;
 CNewsFilterEngine   g_newsEngine;
 CAlertManager       g_alertManager;
 CTradeJournaler     g_journaler;
+CStatePersist       g_statePersist;
 
 double              g_dailyStartingEquity  = 0.0;
 double              g_dailyStartingBalance = 0.0;
@@ -79,9 +82,55 @@ datetime            g_lastDayChecked       = 0;
 datetime            g_lastBarTime          = 0;
 int                 g_consecutiveLosses    = 0;
 int                 g_activeTradingDays    = 0;
-bool                g_tradedToday          = false;
 double              g_latestSetupScore     = 0.0;
 ENUM_MARKET_REGIME  g_latestRegime         = REGIME_RANGE;
+
+//+------------------------------------------------------------------+
+//| Helper Function: Calculate Unique Traded Days From History        |
+//| Uses Dynamic Array to prevent array overflow errors              |
+//+------------------------------------------------------------------+
+int CountUniqueTradingDaysFromHistory(ulong magicNumber)
+  {
+   int uniqueDays = 0;
+   if(!HistorySelect(0, TimeCurrent()))
+      return 0;
+
+   int totalDeals = HistoryDealsTotal();
+   if(totalDeals <= 0)
+      return 0;
+
+   datetime tradedDates[];
+   ArrayResize(tradedDates, totalDeals);
+   int dateCount = 0;
+
+   for(int i = 0; i < totalDeals; i++)
+     {
+      ulong dealTicket = HistoryDealGetTicket(i);
+      if(dealTicket > 0 && HistoryDealGetInteger(dealTicket, DEAL_MAGIC) == (long)magicNumber)
+        {
+         datetime dealTime = (datetime)HistoryDealGetInteger(dealTicket, DEAL_TIME);
+         MqlDateTime dt;
+         TimeToStruct(dealTime, dt);
+         datetime dayTimestamp = StructToTime(dt) - (dt.hour * 3600 + dt.min * 60 + dt.sec);
+
+         bool exists = false;
+         for(int k = 0; k < dateCount; k++)
+           {
+            if(tradedDates[k] == dayTimestamp)
+              {
+               exists = true;
+               break;
+              }
+           }
+         if(!exists)
+           {
+            tradedDates[dateCount] = dayTimestamp;
+            dateCount++;
+           }
+        }
+     }
+   return dateCount;
+  }
 
 //+------------------------------------------------------------------+
 //| Helper Function: New Bar Detection                               |
@@ -120,6 +169,7 @@ int OnInit()
    config.maxOpenPositions          = Inp_MaxOpenPositions;
    config.maxPortfolioRiskPercent   = Inp_MaxPortfolioRisk;
    config.maxLotSize                = 0.0;
+   config.gmtOffsetHours            = Inp_GMTOffsetHours;
    config.customRulesDescription    = "Live Rule-Aware Enforcement";
 
    config.dailyLossWarningPercent   = Inp_MaxDailyLoss * 0.60;
@@ -131,7 +181,7 @@ int OnInit()
    g_profile.Configure(config);
    g_guard.SetProfile(&g_profile);
 
-   // 2. Initialize Engines
+   // 2. Initialize Engines & Persistence
    g_riskManager.SetRiskMode(Inp_RiskMode, Inp_RiskPercent);
    g_portfolioManager.Init(Inp_MagicNumber);
    g_executionEngine.Init(Inp_MagicNumber, Inp_MaxSlippagePoints, 3);
@@ -140,11 +190,27 @@ int OnInit()
    g_newsEngine.SetEnabled(Inp_EnableNewsFilter);
    g_alertManager.Init(true, true, true);
    g_journaler.Init("FundedAI_Trade_Journal.csv");
+   g_statePersist.Init(Inp_MagicNumber);
 
-   // 3. Initialize Starting Equity & Balance
-   g_dailyStartingEquity  = AccountInfoDouble(ACCOUNT_EQUITY);
-   g_dailyStartingBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-   g_lastDayChecked       = TimeCurrent();
+   // 3. Recover Account History Traded Days & High-Water Mark State
+   g_activeTradingDays = CountUniqueTradingDaysFromHistory(Inp_MagicNumber);
+
+   double savedStartBal = 0.0, savedDailyEq = 0.0, savedDailyBal = 0.0, savedHWM = 0.0;
+   int savedDays = 0;
+   if(g_statePersist.LoadState(savedStartBal, savedDailyEq, savedDailyBal, savedHWM, savedDays))
+     {
+      g_dailyStartingEquity  = savedDailyEq;
+      g_dailyStartingBalance = savedDailyBal;
+      g_profile.SetHighWaterMark(savedHWM); // Restore recovered High-Water Mark into profile
+      Print("RECOVERED PERSISTED STATE: Daily Equity = $", savedDailyEq, " HWM = $", savedHWM, " History Days = ", g_activeTradingDays);
+     }
+   else
+     {
+      g_dailyStartingEquity  = AccountInfoDouble(ACCOUNT_EQUITY);
+      g_dailyStartingBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+     }
+
+   g_lastDayChecked = TimeCurrent();
 
    EventSetTimer(1);
    Print("FUNDED AI EA initialized successfully. Daily Loss Mode: ", EnumToString(Inp_DailyLossMode), " Drawdown Model: ", EnumToString(Inp_DrawdownModel));
@@ -157,8 +223,10 @@ int OnInit()
 void OnDeinit(const int reason)
   {
    EventKillTimer();
+   SChallengeAccountStatus status = g_profile.GetStatus();
+   g_statePersist.SaveState(status.startingBalance, g_dailyStartingEquity, g_dailyStartingBalance, status.highWaterMark, g_activeTradingDays);
    g_dashboard.Destroy();
-   Print("FUNDED AI EA deinitialized. Reason: ", reason);
+   Print("FUNDED AI EA deinitialized and state persisted. Reason: ", reason);
   }
 
 //+------------------------------------------------------------------+
@@ -170,20 +238,16 @@ void OnTimer()
    MqlDateTime dt;
    TimeToStruct(now, dt);
 
-   // Detect New Trading Day (Midnight Reset & Trade-Based Day Counter)
+   // Detect New Trading Day (Midnight Reset)
    MqlDateTime lastDt;
    TimeToStruct(g_lastDayChecked, lastDt);
    if(dt.day != lastDt.day)
      {
-      if(g_tradedToday)
-        {
-         g_activeTradingDays++;
-         g_tradedToday = false;
-        }
+      g_activeTradingDays    = CountUniqueTradingDaysFromHistory(Inp_MagicNumber);
       g_dailyStartingEquity  = AccountInfoDouble(ACCOUNT_EQUITY);
       g_dailyStartingBalance = AccountInfoDouble(ACCOUNT_BALANCE);
       g_lastDayChecked       = now;
-      Print("NEW TRADING DAY DETECTED. Active Day Count: #", g_activeTradingDays, " Daily starting equity: $", DoubleToString(g_dailyStartingEquity, 2));
+      Print("NEW TRADING DAY DETECTED. History Active Day Count: #", g_activeTradingDays, " Daily starting equity: $", DoubleToString(g_dailyStartingEquity, 2));
      }
 
    // Evaluate Safety Guard State
@@ -208,8 +272,17 @@ void OnTimer()
       g_alertManager.SendRiskAlert("OVERNIGHT RULE ENFORCED", "Closing all trades before overnight market rollover.");
      }
 
-   // Update Dashboard Visual Panel with Live Calculated Regime
-   g_dashboard.Update(g_profile.GetStatus(), status, g_latestRegime, g_latestSetupScore, g_guard.GetStatusReason());
+   // Update Dashboard Visual Panel
+   double portRisk = g_portfolioManager.GetTotalPortfolioRiskPercent(equity);
+   ENUM_TRADING_SESSION currentSess = CSessionEngine::GetCurrentSession(now, Inp_GMTOffsetHours);
+   string sessStr = EnumToString(currentSess);
+   string newsStr = g_newsEngine.GetNewsStatusString();
+
+   g_dashboard.Update(g_profile.GetStatus(), status, g_latestRegime, g_latestSetupScore, g_guard.GetStatusReason(), newsStr, sessStr, portRisk);
+
+   // Save State
+   SChallengeAccountStatus accStatus = g_profile.GetStatus();
+   g_statePersist.SaveState(accStatus.startingBalance, g_dailyStartingEquity, g_dailyStartingBalance, accStatus.highWaterMark, g_activeTradingDays);
 
    // Emergency Liquidation if Safety Guard triggers Lockdown
    if(g_guard.ShouldCloseAllPositions())
@@ -317,7 +390,6 @@ void OnTick()
 
          if(res.isSuccess)
            {
-            g_tradedToday = true; // Mark trade executed today for trade-based day counting
             g_alertManager.SendTradeAlert(_Symbol, dirStr, signal.suggestedEntry, signal.stopLossPrice, signal.takeProfitPrice, signal.scoreResult.totalScore);
             g_journaler.LogTrade(TimeCurrent(), _Symbol, dirStr, signal.suggestedEntry, signal.stopLossPrice, signal.takeProfitPrice, lot, g_riskManager.GetBaseRiskPercent() * riskMult, signal.scoreResult.totalScore, EnumToString(signal.detectedRegime), signal.scoreResult.explanation);
            }

@@ -25,7 +25,7 @@ public:
 
    void              Init(string prefix = "FundedAI_Dash_");
    void              Destroy(void);
-   void              Update(const SChallengeAccountStatus &status, ENUM_EA_STATUS eaStatus, ENUM_MARKET_REGIME regime, double setupScore, string statusReason);
+   void              Update(const SChallengeAccountStatus &status, ENUM_EA_STATUS eaStatus, ENUM_MARKET_REGIME regime, double setupScore, string statusReason, string newsStatus = "NEWS FILTER ACTIVE", string sessionStatus = "LONDON/NY SESSION", double portfolioRiskPct = 0.0);
 
 private:
    void              CreateLabel(string name, string text, int x, int y, color clr, int fontSize = 9);
@@ -66,7 +66,7 @@ void CDashboardPanel::Destroy(void)
 //+------------------------------------------------------------------+
 //| Renders/Updates On-Chart Dashboard Panel                         |
 //+------------------------------------------------------------------+
-void CDashboardPanel::Update(const SChallengeAccountStatus &status, ENUM_EA_STATUS eaStatus, ENUM_MARKET_REGIME regime, double setupScore, string statusReason)
+void CDashboardPanel::Update(const SChallengeAccountStatus &status, ENUM_EA_STATUS eaStatus, ENUM_MARKET_REGIME regime, double setupScore, string statusReason, string newsStatus, string sessionStatus, double portfolioRiskPct)
   {
    int x = 20;
    int y = 30;
@@ -78,16 +78,19 @@ void CDashboardPanel::Update(const SChallengeAccountStatus &status, ENUM_EA_STAT
    CreateLabel(m_prefix + "Status", StringFormat("EA STATUS: %s | %s", EnumToString(eaStatus), statusReason), x, y, statusColor, 9);
    y += 18;
 
-   CreateLabel(m_prefix + "Equity", StringFormat("Equity: $%.2f | Balance: $%.2f | Today P/L: $%.2f", status.currentEquity, status.currentBalance, status.dailyPL), x, y, clrWhite, 9);
+   CreateLabel(m_prefix + "Equity", StringFormat("Equity: $%.2f | Balance: $%.2f | High-Water Mark: $%.2f", status.currentEquity, status.currentBalance, status.highWaterMark), x, y, clrWhite, 9);
    y += 18;
 
-   CreateLabel(m_prefix + "Drawdown", StringFormat("Daily Drawdown: %.2f%% | Total Drawdown: %.2f%%", status.currentDailyDrawdownPercent, status.currentOverallDrawdownPercent), x, y, (status.currentDailyDrawdownPercent > 2.0) ? clrOrange : clrLime, 9);
+   CreateLabel(m_prefix + "Drawdown", StringFormat("Daily DD Used: %.2f%% | Overall DD Used: %.2f%%", status.currentDailyDrawdownPercent, status.currentOverallDrawdownPercent), x, y, (status.currentDailyDrawdownPercent > 2.0) ? clrOrange : clrLime, 9);
    y += 18;
 
-   CreateLabel(m_prefix + "Target", StringFormat("Target Progress: %.1f%% | Remaining Daily Allowance: $%.2f", status.targetProgressPercent, status.remainingDailyLossAllowance), x, y, clrAqua, 9);
+   CreateLabel(m_prefix + "Target", StringFormat("Target Progress: %.1f%% | Active Trading Days: %d | Portfolio Risk: %.2f%%", status.targetProgressPercent, status.activeTradingDays, portfolioRiskPct), x, y, clrAqua, 9);
    y += 18;
 
-   CreateLabel(m_prefix + "Regime", StringFormat("Market Regime: %s | Rule-Based AI Score: %.0f/100", EnumToString(regime), setupScore), x, y, clrYellow, 9);
+   CreateLabel(m_prefix + "NewsSession", StringFormat("News: %s | Session: %s", newsStatus, sessionStatus), x, y, clrSkyBlue, 9);
+   y += 18;
+
+   CreateLabel(m_prefix + "Regime", StringFormat("Regime: %s | Multi-Factor Score: %.0f/100 | Data Status: OK", EnumToString(regime), setupScore), x, y, clrYellow, 9);
 
    ChartRedraw(0);
   }

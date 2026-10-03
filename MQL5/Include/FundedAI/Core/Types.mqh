@@ -109,6 +109,7 @@ struct SChallengeProfileConfig
    int                   maxOpenPositions;            // Max concurrent open trades
    double                maxPortfolioRiskPercent;     // Max total portfolio risk across open trades
    double                maxLotSize;                  // Max lot size limit (0 = auto)
+   int                   gmtOffsetHours;              // Broker GMT Offset in Hours
    string                customRulesDescription;      // Extra rule notes
 
    //--- Safety Buffers (Internal Risk Control Thresholds)

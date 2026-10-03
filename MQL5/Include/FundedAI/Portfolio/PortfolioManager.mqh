@@ -88,12 +88,16 @@ double CPortfolioManager::GetTotalPortfolioRiskPercent(double accountEquity)
   }
 
 //+------------------------------------------------------------------+
-//| Checks currency correlation exposure                             |
+//| Checks currency correlation exposure for Forex pairs only        |
 //+------------------------------------------------------------------+
 bool CPortfolioManager::IsCurrencyExposureAtLimit(string symbol, int maxCorrelatedPositions)
   {
-   string baseCurr  = StringSubstr(symbol, 0, 3);
-   string quoteCurr = (StringLen(symbol) >= 6) ? StringSubstr(symbol, 3, 3) : "";
+   string profitCurr = SymbolInfoString(symbol, SYMBOL_CURRENCY_PROFIT);
+   string marginCurr = SymbolInfoString(symbol, SYMBOL_CURRENCY_MARGIN);
+
+   // Return false (not applicable) for non-Forex instruments
+   if(profitCurr == "" || marginCurr == "")
+      return false;
 
    int count = 0;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -102,7 +106,10 @@ bool CPortfolioManager::IsCurrencyExposureAtLimit(string symbol, int maxCorrelat
       if(ticket > 0 && PositionGetInteger(POSITION_MAGIC) == (long)m_magicNumber)
         {
          string posSymbol = PositionGetString(POSITION_SYMBOL);
-         if(StringFind(posSymbol, baseCurr) >= 0 || (quoteCurr != "" && StringFind(posSymbol, quoteCurr) >= 0))
+         string posProfit = SymbolInfoString(posSymbol, SYMBOL_CURRENCY_PROFIT);
+         string posMargin = SymbolInfoString(posSymbol, SYMBOL_CURRENCY_MARGIN);
+
+         if(posProfit == profitCurr || posMargin == marginCurr || posProfit == marginCurr || posMargin == profitCurr)
             count++;
         }
      }

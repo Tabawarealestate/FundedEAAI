@@ -44,6 +44,17 @@ struct SMonteCarloResult
   };
 
 //+------------------------------------------------------------------+
+//| Struct: Walk-Forward Testing Window Metrics                      |
+//+------------------------------------------------------------------+
+struct SWalkForwardResult
+  {
+   SSimulationResult trainingInSample;
+   SSimulationResult validationInSample;
+   SSimulationResult outOfSample;
+   double            outOfSampleEfficiencyPercent;
+  };
+
+//+------------------------------------------------------------------+
 //| Class CChallengeSimulator                                         |
 //| Simulates challenge drawdown rules, survival rates, Walk-Forward  |
 //| and Monte Carlo trade order randomizations.                       |
@@ -54,8 +65,9 @@ public:
                      CChallengeSimulator(void);
                     ~CChallengeSimulator(void);
 
-   static SSimulationResult SimulateChallenge(double startingBalance, double targetPct, double maxDailyLossPct, double maxOverallLossPct, ENUM_DRAWDOWN_MODEL ddModel, const double &tradeReturnsDollars[]);
+   static SSimulationResult SimulateChallenge(double startingBalance, double targetPct, double maxDailyLossPct, double maxOverallLossPct, ENUM_DRAWDOWN_MODEL ddModel, const double &tradeReturnsDollars[], int tradesPerDay = 3);
    static SMonteCarloResult RunMonteCarloSimulation(double startingBalance, double targetPct, double maxDailyLossPct, double maxOverallLossPct, ENUM_DRAWDOWN_MODEL ddModel, const double &tradeReturnsDollars[], int iterations = 100);
+   static SWalkForwardResult RunWalkForwardTesting(double startingBalance, double targetPct, double maxDailyLossPct, double maxOverallLossPct, ENUM_DRAWDOWN_MODEL ddModel, const double &allTradesReturns[]);
   };
 
 //+------------------------------------------------------------------+
@@ -74,8 +86,9 @@ CChallengeSimulator::~CChallengeSimulator(void)
 
 //+------------------------------------------------------------------+
 //| Simulates challenge outcome for a sequence of trade returns      |
+//| Resets daily starting equity every tradesPerDay trades           |
 //+------------------------------------------------------------------+
-SSimulationResult CChallengeSimulator::SimulateChallenge(double startingBalance, double targetPct, double maxDailyLossPct, double maxOverallLossPct, ENUM_DRAWDOWN_MODEL ddModel, const double &tradeReturnsDollars[])
+SSimulationResult CChallengeSimulator::SimulateChallenge(double startingBalance, double targetPct, double maxDailyLossPct, double maxOverallLossPct, ENUM_DRAWDOWN_MODEL ddModel, const double &tradeReturnsDollars[], int tradesPerDay)
   {
    SSimulationResult result;
    result.totalTrades               = ArraySize(tradeReturnsDollars);
@@ -107,6 +120,10 @@ SSimulationResult CChallengeSimulator::SimulateChallenge(double startingBalance,
 
    for(int i = 0; i < result.totalTrades; i++)
      {
+      // Reset Daily Starting Equity every tradesPerDay boundary
+      if(i > 0 && (i % tradesPerDay == 0))
+         dailyStartingEquity = currentEquity;
+
       double pnl = tradeReturnsDollars[i];
       currentEquity += pnl;
       result.netProfit += pnl;
@@ -210,7 +227,7 @@ SMonteCarloResult CChallengeSimulator::RunMonteCarloSimulation(double startingBa
          shuffledTrades[j] = temp;
         }
 
-      SSimulationResult singleRes = SimulateChallenge(startingBalance, targetPct, maxDailyLossPct, maxOverallLossPct, ddModel, shuffledTrades);
+      SSimulationResult singleRes = SimulateChallenge(startingBalance, targetPct, maxDailyLossPct, maxOverallLossPct, ddModel, shuffledTrades, 3);
       totalNetProfitSum += singleRes.netProfit;
 
       if(singleRes.isTargetPassed && !singleRes.isRuleViolated)
@@ -226,4 +243,39 @@ SMonteCarloResult CChallengeSimulator::RunMonteCarloSimulation(double startingBa
    mcResult.averageNetProfit = totalNetProfitSum / mcResult.totalSimulations;
 
    return mcResult;
+  }
+
+//+------------------------------------------------------------------+
+//| Walk-Forward Testing Engine (In-Sample vs Out-of-Sample Windows) |
+//+------------------------------------------------------------------+
+SWalkForwardResult CChallengeSimulator::RunWalkForwardTesting(double startingBalance, double targetPct, double maxDailyLossPct, double maxOverallLossPct, ENUM_DRAWDOWN_MODEL ddModel, const double &allTradesReturns[])
+  {
+   SWalkForwardResult wfResult;
+   int total = ArraySize(allTradesReturns);
+   if(total < 10)
+      return wfResult;
+
+   int trainSize = total * 50 / 100;
+   int valSize   = total * 25 / 100;
+   int oosSize   = total - trainSize - valSize;
+
+   double trainTrades[], valTrades[], oosTrades[];
+   ArrayResize(trainTrades, trainSize);
+   ArrayResize(valTrades, valSize);
+   ArrayResize(oosTrades, oosSize);
+
+   for(int i = 0; i < trainSize; i++) trainTrades[i] = allTradesReturns[i];
+   for(int i = 0; i < valSize; i++)   valTrades[i]   = allTradesReturns[trainSize + i];
+   for(int i = 0; i < oosSize; i++)   oosTrades[i]   = allTradesReturns[trainSize + valSize + i];
+
+   wfResult.trainingInSample   = SimulateChallenge(startingBalance, targetPct, maxDailyLossPct, maxOverallLossPct, ddModel, trainTrades, 3);
+   wfResult.validationInSample = SimulateChallenge(startingBalance, targetPct, maxDailyLossPct, maxOverallLossPct, ddModel, valTrades, 3);
+   wfResult.outOfSample         = SimulateChallenge(startingBalance, targetPct, maxDailyLossPct, maxOverallLossPct, ddModel, oosTrades, 3);
+
+   if(wfResult.trainingInSample.netProfit > 0.0)
+      wfResult.outOfSampleEfficiencyPercent = (wfResult.outOfSample.netProfit / wfResult.trainingInSample.netProfit) * 100.0;
+   else
+      wfResult.outOfSampleEfficiencyPercent = 0.0;
+
+   return wfResult;
   }

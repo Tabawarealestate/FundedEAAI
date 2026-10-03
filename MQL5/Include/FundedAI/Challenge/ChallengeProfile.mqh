@@ -29,6 +29,7 @@ public:
    void              LoadDefaultPreset(double initialBalance = 100000.0, ENUM_CHALLENGE_PHASE phase = CHALLENGE_PHASE_1);
    void              Configure(const SChallengeProfileConfig &config);
    void              SetPhase(ENUM_CHALLENGE_PHASE phase);
+   void              SetHighWaterMark(double hwm) { m_status.highWaterMark = MathMax(m_config.initialBalance, hwm); }
 
    //--- Getter Methods
    SChallengeProfileConfig GetConfig(void) const { return m_config; }
@@ -117,7 +118,8 @@ void CChallengeProfile::LoadDefaultPreset(double initialBalance, ENUM_CHALLENGE_
 void CChallengeProfile::Configure(const SChallengeProfileConfig &config)
   {
    m_config = config;
-   m_status.highWaterMark = m_config.initialBalance;
+   if(m_status.highWaterMark < m_config.initialBalance)
+      m_status.highWaterMark = m_config.initialBalance;
    UpdateAccountStatus(m_config.initialBalance, m_config.initialBalance, m_config.initialBalance, m_config.initialBalance, 1);
   }
 

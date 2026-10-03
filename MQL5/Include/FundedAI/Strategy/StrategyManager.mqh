@@ -176,7 +176,7 @@ STradeSignal CStrategyManager::EvaluateMarket(string symbol,
    aiInput.isVolatilityNormal    = (signal.detectedRegime != REGIME_HIGH_VOLATILITY && signal.detectedRegime != REGIME_ABNORMAL);
 
    // Real Active Session Filter Check
-   aiInput.isSessionOptimal      = CSessionEngine::IsOptimalTradingSession(time[0]);
+   aiInput.isSessionOptimal      = CSessionEngine::IsOptimalTradingSession(time[1], spec.gmtOffsetHours);
    aiInput.isSpreadExecutionGood = (spec.currentSpreadPoints <= maxSpreadPoints);
    aiInput.riskRewardRatio       = 2.5;
 
@@ -188,30 +188,30 @@ STradeSignal CStrategyManager::EvaluateMarket(string symbol,
      {
       signal.hasSignal       = true;
       signal.isBuy           = isSignalBullish;
-      signal.suggestedEntry  = close[0];
+      signal.suggestedEntry  = close[1]; // Use completed candle 1 close price
 
       // Symbol-Agnostic ATR-Based Stop Loss Fallback
       double minSLDist = (atr14 > 0.0) ? (1.5 * atr14) : (200.0 * spec.pointSize);
 
       if(signal.isBuy)
         {
-         signal.stopLossPrice   = (latestLow.price > 0.0 && latestLow.price < close[0]) ? latestLow.price : (close[0] - minSLDist);
-         double slDist          = close[0] - signal.stopLossPrice;
+         signal.stopLossPrice   = (latestLow.price > 0.0 && latestLow.price < close[1]) ? latestLow.price : (close[1] - minSLDist);
+         double slDist          = close[1] - signal.stopLossPrice;
          if(slDist < minSLDist)
-            signal.stopLossPrice = close[0] - minSLDist;
+            signal.stopLossPrice = close[1] - minSLDist;
 
-         slDist                 = close[0] - signal.stopLossPrice;
-         signal.takeProfitPrice = close[0] + (slDist * 2.5);
+         slDist                 = close[1] - signal.stopLossPrice;
+         signal.takeProfitPrice = close[1] + (slDist * 2.5);
         }
       else
         {
-         signal.stopLossPrice   = (latestHigh.price > 0.0 && latestHigh.price > close[0]) ? latestHigh.price : (close[0] + minSLDist);
-         double slDist          = signal.stopLossPrice - close[0];
+         signal.stopLossPrice   = (latestHigh.price > 0.0 && latestHigh.price > close[1]) ? latestHigh.price : (close[1] + minSLDist);
+         double slDist          = signal.stopLossPrice - close[1];
          if(slDist < minSLDist)
-            signal.stopLossPrice = close[0] + minSLDist;
+            signal.stopLossPrice = close[1] + minSLDist;
 
-         slDist                 = signal.stopLossPrice - close[0];
-         signal.takeProfitPrice = close[0] - (slDist * 2.5);
+         slDist                 = signal.stopLossPrice - close[1];
+         signal.takeProfitPrice = close[1] - (slDist * 2.5);
         }
 
       signal.riskRewardRatio = 2.5;

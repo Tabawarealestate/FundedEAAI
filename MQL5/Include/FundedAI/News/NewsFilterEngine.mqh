@@ -39,7 +39,7 @@ public:
 //+------------------------------------------------------------------+
 CNewsFilterEngine::CNewsFilterEngine(void)
   : m_isNewsFilterEnabled(true),
-    m_isCalendarAttached(true) // Set to true by default for active status
+    m_isCalendarAttached(true) // Set to true by default for normal trade scanning
   {
   }
 
@@ -74,13 +74,12 @@ bool CNewsFilterEngine::IsHighImpactNewsImminent(datetime timeCurrent, int buffe
   }
 
 //+------------------------------------------------------------------+
-//| Enforces safe trading blocks when news event is active           |
+//| Enforces safe trading blocks during high-impact news releases    |
 //+------------------------------------------------------------------+
 bool CNewsFilterEngine::ShouldBlockTradingForNews(void) const
   {
-   if(!m_isNewsFilterEnabled)
+   if(!m_isNewsFilterEnabled || !m_isCalendarAttached)
       return false;
 
-   // Only block when high impact news event is imminent
    return IsHighImpactNewsImminent(TimeCurrent(), 30);
   }

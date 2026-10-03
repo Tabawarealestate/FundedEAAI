@@ -90,8 +90,7 @@ void CMarketStructureEngine::Reset(void)
 
 //+------------------------------------------------------------------+
 //| Scans price series for fractal swing highs and swing lows        |
-//| Chronological Recency: Index 0 is the most recent confirmed swing|
-//| Strictly evaluates completed bars (starts at swingDepth + 1)     |
+//| Confirmed Swings: Starts at bar index (swingDepth + 1)           |
 //+------------------------------------------------------------------+
 bool CMarketStructureEngine::FindSwingPoints(const double &high[], const double &low[], const datetime &time[], int totalBars, int swingDepth)
   {
@@ -99,7 +98,6 @@ bool CMarketStructureEngine::FindSwingPoints(const double &high[], const double 
    if(totalBars < (swingDepth * 2 + 2))
       return false;
 
-   // Start loop at swingDepth + 1 to ensure i - j >= 1 (excluding unclosed bar 0)
    for(int i = swingDepth + 1; i < totalBars - swingDepth; i++)
      {
       bool isSwingHigh = true;
@@ -137,7 +135,7 @@ bool CMarketStructureEngine::FindSwingPoints(const double &high[], const double 
 
 //+------------------------------------------------------------------+
 //| Evaluates Break of Structure (BOS) / CHoCH / MSS                 |
-//| Anti-Look-Ahead: Evaluates completed candle close[1] vs swings   |
+//| Compares completed candle close[1] against historical swing high/low|
 //+------------------------------------------------------------------+
 ENUM_STRUCTURE_SIGNAL CMarketStructureEngine::AnalyzeStructure(const double &close[], const double &high[], const double &low[], int totalBars)
   {
@@ -145,24 +143,23 @@ ENUM_STRUCTURE_SIGNAL CMarketStructureEngine::AnalyzeStructure(const double &clo
       return STRUCTURE_NONE;
 
    double completedClose = close[1];
-   double prevClose      = close[2];
 
-   // Bullish Break of completed candle close[1] above recent swing high
-   if(completedClose > m_recentHighs[0].price && prevClose <= m_recentHighs[0].price)
+   // Bullish Break of completed candle close[1] above recent swing high at m_recentHighs[0]
+   if(m_recentHighs[0].price > 0.0 && completedClose > m_recentHighs[0].price)
      {
       if(m_recentHighs[0].price < m_recentHighs[1].price)
-         return STRUCTURE_CHOCH_BULLISH; // Trend Reversal
+         return STRUCTURE_CHOCH_BULLISH; // Reversal
       else
-         return STRUCTURE_BOS_BULLISH;   // Trend Continuation
+         return STRUCTURE_BOS_BULLISH;   // Continuation
      }
 
-   // Bearish Break of completed candle close[1] below recent swing low
-   if(completedClose < m_recentLows[0].price && prevClose >= m_recentLows[0].price)
+   // Bearish Break of completed candle close[1] below recent swing low at m_recentLows[0]
+   if(m_recentLows[0].price > 0.0 && completedClose < m_recentLows[0].price)
      {
       if(m_recentLows[0].price > m_recentLows[1].price)
-         return STRUCTURE_CHOCH_BEARISH; // Trend Reversal
+         return STRUCTURE_CHOCH_BEARISH; // Reversal
       else
-         return STRUCTURE_BOS_BEARISH;   // Trend Continuation
+         return STRUCTURE_BOS_BEARISH;   // Continuation
      }
 
    return STRUCTURE_NONE;
@@ -175,7 +172,7 @@ bool CMarketStructureEngine::GetLatestSwingHigh(SSwingPoint &high) const
   {
    if(m_highCount > 0)
      {
-      high = m_recentHighs[0]; // Index 0 is chronologically most recent
+      high = m_recentHighs[0];
       return true;
      }
    return false;
@@ -188,7 +185,7 @@ bool CMarketStructureEngine::GetLatestSwingLow(SSwingPoint &low) const
   {
    if(m_lowCount > 0)
      {
-      low = m_recentLows[0]; // Index 0 is chronologically most recent
+      low = m_recentLows[0];
       return true;
      }
    return false;
