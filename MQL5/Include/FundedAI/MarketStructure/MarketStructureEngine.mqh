@@ -91,7 +91,7 @@ void CMarketStructureEngine::Reset(void)
 //+------------------------------------------------------------------+
 //| Scans price series for fractal swing highs and swing lows        |
 //+------------------------------------------------------------------+
-bool CMarketStructureEngine::FindSwingPoints(const double &high[], const double &low[], const datetime &time[], int totalBars, int swingDepth = 3)
+bool CMarketStructureEngine::FindSwingPoints(const double &high[], const double &low[], const datetime &time[], int totalBars, int swingDepth)
   {
    Reset();
    if(totalBars < (swingDepth * 2 + 1))

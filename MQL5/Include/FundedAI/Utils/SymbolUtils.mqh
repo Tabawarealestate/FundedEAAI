@@ -42,7 +42,7 @@ public:
                     ~CSymbolUtils(void);
 
    //--- Spec Detection
-   static bool       GetSymbolSpec(string symbol, SSymbolSpecification &spec);
+   static bool       GetSymbolSpec(string symbol, SSymbolSpecification &spec, int maxStaleSeconds = 10);
    static bool       ValidateMarketData(string symbol, int maxAllowedSpreadPoints, int maxStaleSeconds = 10);
   };
 
@@ -63,7 +63,7 @@ CSymbolUtils::~CSymbolUtils(void)
 //+------------------------------------------------------------------+
 //| Detects broker specifications for any given symbol               |
 //+------------------------------------------------------------------+
-bool CSymbolUtils::GetSymbolSpec(string symbol, SSymbolSpecification &spec)
+bool CSymbolUtils::GetSymbolSpec(string symbol, SSymbolSpecification &spec, int maxStaleSeconds)
   {
    if(!SymbolInfoInteger(symbol, SYMBOL_SELECT))
       SymbolSelect(symbol, true);
@@ -90,7 +90,7 @@ bool CSymbolUtils::GetSymbolSpec(string symbol, SSymbolSpecification &spec)
    // Verify tick freshness
    datetime lastTickTime = (datetime)SymbolInfoInteger(symbol, SYMBOL_TIME);
    datetime currentTime  = TimeCurrent();
-   spec.isDataFresh         = ((currentTime - lastTickTime) <= 10);
+   spec.isDataFresh         = ((currentTime - lastTickTime) <= maxStaleSeconds);
 
    if(spec.pointSize <= 0.0 || spec.tickValue <= 0.0 || spec.lotStep <= 0.0)
       return false;
@@ -101,10 +101,10 @@ bool CSymbolUtils::GetSymbolSpec(string symbol, SSymbolSpecification &spec)
 //+------------------------------------------------------------------+
 //| Checks spread limits and data freshness                          |
 //+------------------------------------------------------------------+
-bool CSymbolUtils::ValidateMarketData(string symbol, int maxAllowedSpreadPoints, int maxStaleSeconds = 10)
+bool CSymbolUtils::ValidateMarketData(string symbol, int maxAllowedSpreadPoints, int maxStaleSeconds)
   {
    SSymbolSpecification spec;
-   if(!GetSymbolSpec(symbol, spec))
+   if(!GetSymbolSpec(symbol, spec, maxStaleSeconds))
       return false;
 
    if(!spec.isTradeAllowed)

@@ -57,7 +57,7 @@ CIndicatorEngine::~CIndicatorEngine(void)
 //+------------------------------------------------------------------+
 //| Calculates RSI value from close price array                      |
 //+------------------------------------------------------------------+
-double CIndicatorEngine::CalculateRSI(const double &close[], int period = 14)
+double CIndicatorEngine::CalculateRSI(const double &close[], int period)
   {
    int total = ArraySize(close);
    if(total < period + 1)
@@ -88,7 +88,7 @@ double CIndicatorEngine::CalculateRSI(const double &close[], int period = 14)
 //+------------------------------------------------------------------+
 //| Calculates ATR value from high, low, close arrays                |
 //+------------------------------------------------------------------+
-double CIndicatorEngine::CalculateATR(const double &high[], const double &low[], const double &close[], int period = 14)
+double CIndicatorEngine::CalculateATR(const double &high[], const double &low[], const double &close[], int period)
   {
    int total = ArraySize(high);
    if(total < period + 1)

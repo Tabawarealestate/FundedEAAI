@@ -92,11 +92,11 @@ bool COrderBlockEngine::DetectOrderBlocks(const double &open[], const double &hi
          m_orderBlocks[m_obCount].barIndex    = i + 1;
          m_orderBlocks[m_obCount].isBullish   = true;
 
-         // Check mitigation by subsequent price action
+         // Mitigation occurs only if price breaks below the OB invalidation low boundary
          bool mitigated = false;
          for(int k = i - 1; k >= 0; k--)
            {
-            if(low[k] <= m_orderBlocks[m_obCount].highPrice)
+            if(low[k] < m_orderBlocks[m_obCount].lowPrice)
               {
                mitigated = true;
                break;
@@ -116,11 +116,11 @@ bool COrderBlockEngine::DetectOrderBlocks(const double &open[], const double &hi
          m_orderBlocks[m_obCount].barIndex    = i + 1;
          m_orderBlocks[m_obCount].isBullish   = false;
 
-         // Check mitigation by subsequent price action
+         // Mitigation occurs only if price breaks above the OB invalidation high boundary
          bool mitigated = false;
          for(int k = i - 1; k >= 0; k--)
            {
-            if(high[k] >= m_orderBlocks[m_obCount].lowPrice)
+            if(high[k] > m_orderBlocks[m_obCount].highPrice)
               {
                mitigated = true;
                break;

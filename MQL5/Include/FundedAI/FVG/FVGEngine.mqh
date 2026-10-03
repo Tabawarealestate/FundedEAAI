@@ -75,7 +75,7 @@ void CFVGEngine::Reset(void)
 //+------------------------------------------------------------------+
 //| Detects Bullish and Bearish Fair Value Gaps (3-candle imbalance) |
 //+------------------------------------------------------------------+
-bool CFVGEngine::DetectFVGs(const double &high[], const double &low[], const datetime &time[], int totalBars, double minGapPoints = 10.0, double pointSize = 0.00001)
+bool CFVGEngine::DetectFVGs(const double &high[], const double &low[], const datetime &time[], int totalBars, double minGapPoints, double pointSize)
   {
    Reset();
    if(totalBars < 4 || pointSize <= 0.0)
@@ -94,11 +94,21 @@ bool CFVGEngine::DetectFVGs(const double &high[], const double &low[], const dat
          m_fvgs[m_fvgCount].barIndex    = i;
          m_fvgs[m_fvgCount].isBullish   = true;
 
-         // Check fill status by current candle (0)
-         if(low[0] <= m_fvgs[m_fvgCount].lowerPrice)
-            m_fvgs[m_fvgCount].isFilled = true;
-         else if(low[0] < m_fvgs[m_fvgCount].upperPrice)
-            m_fvgs[m_fvgCount].isPartiallyFilled = true;
+         // Check fill status across intermediate bars (from formation down to bar 0)
+         bool filled = false;
+         bool partiallyFilled = false;
+         for(int k = i - 2; k >= 0; k--)
+           {
+            if(low[k] <= m_fvgs[m_fvgCount].lowerPrice)
+              {
+               filled = true;
+               break;
+              }
+            if(low[k] < m_fvgs[m_fvgCount].upperPrice)
+               partiallyFilled = true;
+           }
+         m_fvgs[m_fvgCount].isFilled          = filled;
+         m_fvgs[m_fvgCount].isPartiallyFilled = partiallyFilled;
 
          m_fvgCount++;
         }
@@ -112,11 +122,21 @@ bool CFVGEngine::DetectFVGs(const double &high[], const double &low[], const dat
          m_fvgs[m_fvgCount].barIndex    = i;
          m_fvgs[m_fvgCount].isBullish   = false;
 
-         // Check fill status by current candle (0)
-         if(high[0] >= m_fvgs[m_fvgCount].upperPrice)
-            m_fvgs[m_fvgCount].isFilled = true;
-         else if(high[0] > m_fvgs[m_fvgCount].lowerPrice)
-            m_fvgs[m_fvgCount].isPartiallyFilled = true;
+         // Check fill status across intermediate bars
+         bool filled = false;
+         bool partiallyFilled = false;
+         for(int k = i - 2; k >= 0; k--)
+           {
+            if(high[k] >= m_fvgs[m_fvgCount].upperPrice)
+              {
+               filled = true;
+               break;
+              }
+            if(high[k] > m_fvgs[m_fvgCount].lowerPrice)
+               partiallyFilled = true;
+           }
+         m_fvgs[m_fvgCount].isFilled          = filled;
+         m_fvgs[m_fvgCount].isPartiallyFilled = partiallyFilled;
 
          m_fvgCount++;
         }

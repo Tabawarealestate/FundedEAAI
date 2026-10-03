@@ -55,7 +55,7 @@ CDynamicRiskManager::~CDynamicRiskManager(void)
 //+------------------------------------------------------------------+
 //| Sets risk mode & base risk percentage                            |
 //+------------------------------------------------------------------+
-void CDynamicRiskManager::SetRiskMode(ENUM_RISK_MODE mode, double customRiskPercent = 0.25)
+void CDynamicRiskManager::SetRiskMode(ENUM_RISK_MODE mode, double customRiskPercent)
   {
    m_riskMode = mode;
    switch(mode)

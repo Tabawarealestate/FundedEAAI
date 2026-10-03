@@ -69,7 +69,7 @@ CChallengeProfile::~CChallengeProfile(void)
 //+------------------------------------------------------------------+
 //| Loads standard industry defaults for a given account balance     |
 //+------------------------------------------------------------------+
-void CChallengeProfile::LoadDefaultPreset(double initialBalance = 100000.0, ENUM_CHALLENGE_PHASE phase = CHALLENGE_PHASE_1)
+void CChallengeProfile::LoadDefaultPreset(double initialBalance, ENUM_CHALLENGE_PHASE phase)
   {
    m_config.profileName           = "Standard Challenge Preset";
    m_config.initialBalance        = (initialBalance > 0.0) ? initialBalance : 100000.0;

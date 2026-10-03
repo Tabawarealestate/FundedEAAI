@@ -87,7 +87,7 @@ ENUM_LIQUIDITY_SWEEP CLiquidityEngine::DetectSweep(const double &open[], const d
 //+------------------------------------------------------------------+
 //| Detects Equal Highs (EQH - Buy-Side Liquidity Pool)              |
 //+------------------------------------------------------------------+
-bool CLiquidityEngine::DetectEqualHighs(const double &high[], int totalBars, double thresholdPoints = 5.0, double pointSize = 0.00001)
+bool CLiquidityEngine::DetectEqualHighs(const double &high[], int totalBars, double thresholdPoints, double pointSize)
   {
    if(totalBars < 10)
       return false;
@@ -108,7 +108,7 @@ bool CLiquidityEngine::DetectEqualHighs(const double &high[], int totalBars, dou
 //+------------------------------------------------------------------+
 //| Detects Equal Lows (EQL - Sell-Side Liquidity Pool)              |
 //+------------------------------------------------------------------+
-bool CLiquidityEngine::DetectEqualLows(const double &low[], int totalBars, double thresholdPoints = 5.0, double pointSize = 0.00001)
+bool CLiquidityEngine::DetectEqualLows(const double &low[], int totalBars, double thresholdPoints, double pointSize)
   {
    if(totalBars < 10)
       return false;
