@@ -21,6 +21,25 @@ enum ENUM_CHALLENGE_PHASE
   };
 
 //+------------------------------------------------------------------+
+//| Enumeration: Daily Loss Calculation Mode                         |
+//+------------------------------------------------------------------+
+enum ENUM_DAILY_LOSS_MODE
+  {
+   DAILY_LOSS_MODE_A_EQUITY  = 1, // Mode A: Daily loss based on Beginning-Of-Day Equity
+   DAILY_LOSS_MODE_B_BALANCE = 2, // Mode B: Daily loss based on Beginning-Of-Day Balance
+   DAILY_LOSS_MODE_C_CUSTOM  = 3  // Mode C: Custom Provider Formula
+  };
+
+//+------------------------------------------------------------------+
+//| Enumeration: Overall Drawdown Calculation Model                  |
+//+------------------------------------------------------------------+
+enum ENUM_DRAWDOWN_MODEL
+  {
+   DRAWDOWN_STATIC   = 1, // Static Max Loss relative to Initial Starting Balance
+   DRAWDOWN_TRAILING = 2  // Trailing Max Loss relative to Peak Equity High-Water Mark
+  };
+
+//+------------------------------------------------------------------+
 //| Enumeration: System Risk Strategy Modes                          |
 //+------------------------------------------------------------------+
 enum ENUM_RISK_MODE
@@ -77,6 +96,8 @@ struct SChallengeProfileConfig
    string                profileName;                 // Name of Prop Firm / Custom Profile
    double                initialBalance;              // Base Capital (e.g. $100,000)
    ENUM_CHALLENGE_PHASE  phase;                       // Phase 1, Phase 2, Funded, Custom
+   ENUM_DAILY_LOSS_MODE  dailyLossMode;               // Mode A (Equity), Mode B (Balance), Mode C
+   ENUM_DRAWDOWN_MODEL   drawdownModel;               // Static vs Trailing High-Water Mark
    double                profitTargetPercent;         // Target Profit (e.g. 10.0%)
    double                maxDailyLossPercent;         // Daily Loss Limit (e.g. 5.0%)
    double                maxOverallLossPercent;       // Overall Drawdown Limit (e.g. 10.0%)
@@ -86,6 +107,7 @@ struct SChallengeProfileConfig
    bool                  allowNewsTrading;            // Is trading permitted during high impact news?
    bool                  allowOvernightTrading;       // Can trades be held overnight?
    int                   maxOpenPositions;            // Max concurrent open trades
+   double                maxPortfolioRiskPercent;     // Max total portfolio risk across open trades
    double                maxLotSize;                  // Max lot size limit (0 = auto)
    string                customRulesDescription;      // Extra rule notes
 
@@ -105,7 +127,9 @@ struct SChallengeAccountStatus
    double                startingBalance;             // Initial Challenge Balance
    double                currentBalance;              // Current Account Balance
    double                currentEquity;               // Current Account Equity
+   double                highWaterMark;               // Peak Equity High-Water Mark for Trailing DD
    double                dailyStartingEquity;         // Equity at start of broker trading day
+   double                dailyStartingBalance;        // Balance at start of broker trading day
    double                dailyPL;                     // Today's Realized + Floating P/L
    double                overallPL;                   // Total Realized + Floating P/L
    double                currentDailyDrawdownPercent; // Current daily drawdown percentage
@@ -115,6 +139,8 @@ struct SChallengeAccountStatus
    double                targetProgressPercent;       // Progress towards profit target (0 - 100%)
    int                   activeTradingDays;           // Days traded so far
    bool                  isTargetReached;             // True if profit target achieved
+   bool                  isMinTradingDaysMet;         // True if minimum trading days met
    bool                  isDailyLimitBreached;        // True if daily safety/hard limit breached
    bool                  isOverallLimitBreached;      // True if overall safety/hard limit breached
+   bool                  isNewsDataAvailable;         // False = NEWS DATA UNAVAILABLE
   };

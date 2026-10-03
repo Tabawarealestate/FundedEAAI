@@ -41,7 +41,7 @@ public:
    ENUM_CHALLENGE_PHASE GetPhase(void) const { return m_config.phase; }
 
    //--- Calculation & Tracking Methods
-   void              UpdateAccountStatus(double currentBalance, double currentEquity, double dailyStartingEquity);
+   void              UpdateAccountStatus(double currentBalance, double currentEquity, double dailyStartingEquity, double dailyStartingBalance, int activeTradingDays = 1);
    bool              IsDailyLossWarning(void) const;
    bool              IsDailyLossSoftStop(void) const;
    bool              IsDailyLossEmergency(void) const;
@@ -74,6 +74,8 @@ void CChallengeProfile::LoadDefaultPreset(double initialBalance, ENUM_CHALLENGE_
    m_config.profileName           = "Standard Challenge Preset";
    m_config.initialBalance        = (initialBalance > 0.0) ? initialBalance : 100000.0;
    m_config.phase                 = phase;
+   m_config.dailyLossMode         = DAILY_LOSS_MODE_A_EQUITY;
+   m_config.drawdownModel         = DRAWDOWN_STATIC;
 
    //--- Set Profit Target based on phase
    if(phase == CHALLENGE_PHASE_1)
@@ -81,7 +83,7 @@ void CChallengeProfile::LoadDefaultPreset(double initialBalance, ENUM_CHALLENGE_
    else if(phase == CHALLENGE_PHASE_2)
       m_config.profitTargetPercent = 5.0;  // 5% Phase 2 Target
    else
-      m_config.profitTargetPercent = 0.0;  // Live Funded (No profit target ceiling required)
+      m_config.profitTargetPercent = 0.0;  // Live Funded
 
    //--- Standard Prop Firm Risk Parameters
    m_config.maxDailyLossPercent   = 5.0;   // 5% Hard Daily Limit
@@ -92,18 +94,21 @@ void CChallengeProfile::LoadDefaultPreset(double initialBalance, ENUM_CHALLENGE_
    m_config.allowNewsTrading      = false;
    m_config.allowOvernightTrading = true;
    m_config.maxOpenPositions      = 5;
+   m_config.maxPortfolioRiskPercent= 2.0;  // 2.0% max total portfolio risk
    m_config.maxLotSize            = 0.0;   // Auto lot limit based on risk
    m_config.customRulesDescription= "Default Prop Firm Profile Settings";
 
-   //--- Internal Safety Buffers (Triggers before hitting hard limits)
+   //--- Internal Safety Buffers
    m_config.dailyLossWarningPercent   = 3.0; // 3.0% daily loss triggers DEFENSIVE mode
    m_config.dailyLossSoftStopPercent  = 4.0; // 4.0% daily loss halts new entries
    m_config.dailyLossEmergencyPercent = 4.5; // 4.5% daily loss closes trades & locks EA
    m_config.maxLossWarningPercent     = 7.5; // 7.5% total drawdown triggers DEFENSIVE mode
    m_config.maxLossEmergencyPercent   = 8.5; // 8.5% total drawdown locks EA
 
+   m_status.highWaterMark = m_config.initialBalance;
+
    // Initialize Status
-   UpdateAccountStatus(m_config.initialBalance, m_config.initialBalance, m_config.initialBalance);
+   UpdateAccountStatus(m_config.initialBalance, m_config.initialBalance, m_config.initialBalance, m_config.initialBalance, 1);
   }
 
 //+------------------------------------------------------------------+
@@ -112,7 +117,8 @@ void CChallengeProfile::LoadDefaultPreset(double initialBalance, ENUM_CHALLENGE_
 void CChallengeProfile::Configure(const SChallengeProfileConfig &config)
   {
    m_config = config;
-   UpdateAccountStatus(m_config.initialBalance, m_config.initialBalance, m_config.initialBalance);
+   m_status.highWaterMark = m_config.initialBalance;
+   UpdateAccountStatus(m_config.initialBalance, m_config.initialBalance, m_config.initialBalance, m_config.initialBalance, 1);
   }
 
 //+------------------------------------------------------------------+
@@ -132,36 +138,55 @@ void CChallengeProfile::SetPhase(ENUM_CHALLENGE_PHASE phase)
 //+------------------------------------------------------------------+
 //| Updates current account metrics & calculates safety margins      |
 //+------------------------------------------------------------------+
-void CChallengeProfile::UpdateAccountStatus(double currentBalance, double currentEquity, double dailyStartingEquity)
+void CChallengeProfile::UpdateAccountStatus(double currentBalance, double currentEquity, double dailyStartingEquity, double dailyStartingBalance, int activeTradingDays)
   {
    m_status.startingBalance       = m_config.initialBalance;
    m_status.currentBalance        = currentBalance;
    m_status.currentEquity         = currentEquity;
    m_status.dailyStartingEquity   = (dailyStartingEquity > 0.0) ? dailyStartingEquity : currentEquity;
+   m_status.dailyStartingBalance  = (dailyStartingBalance > 0.0) ? dailyStartingBalance : currentBalance;
+   m_status.activeTradingDays     = activeTradingDays;
+   m_status.isMinTradingDaysMet   = (activeTradingDays >= m_config.minTradingDays);
 
-   //--- Daily P/L Calculation (Equity vs Daily Starting Equity)
-   m_status.dailyPL               = currentEquity - m_status.dailyStartingEquity;
-   m_status.overallPL             = currentEquity - m_status.startingBalance;
+   // Update Peak Equity High-Water Mark for Trailing Drawdown
+   if(currentEquity > m_status.highWaterMark)
+      m_status.highWaterMark = currentEquity;
 
-   //--- Daily Drawdown % (Positive value represents loss %)
-   if(m_status.dailyPL < 0.0 && m_status.dailyStartingEquity > 0.0)
-      m_status.currentDailyDrawdownPercent = (-m_status.dailyPL / m_status.dailyStartingEquity) * 100.0;
+   //--- Daily P/L Calculation according to Configured Daily Loss Mode
+   if(m_config.dailyLossMode == DAILY_LOSS_MODE_A_EQUITY)
+      m_status.dailyPL = currentEquity - m_status.dailyStartingEquity;
+   else if(m_config.dailyLossMode == DAILY_LOSS_MODE_B_BALANCE)
+      m_status.dailyPL = currentEquity - m_status.dailyStartingBalance;
+   else
+      m_status.dailyPL = currentEquity - MathMin(m_status.dailyStartingEquity, m_status.dailyStartingBalance);
+
+   //--- Overall Drawdown Calculation according to Drawdown Model
+   if(m_config.drawdownModel == DRAWDOWN_STATIC)
+      m_status.overallPL = currentEquity - m_status.startingBalance;
+   else
+      m_status.overallPL = currentEquity - m_status.highWaterMark;
+
+   //--- Daily Drawdown %
+   double dailyBase = (m_config.dailyLossMode == DAILY_LOSS_MODE_B_BALANCE) ? m_status.dailyStartingBalance : m_status.dailyStartingEquity;
+   if(m_status.dailyPL < 0.0 && dailyBase > 0.0)
+      m_status.currentDailyDrawdownPercent = (-m_status.dailyPL / dailyBase) * 100.0;
    else
       m_status.currentDailyDrawdownPercent = 0.0;
 
-   //--- Overall Drawdown % (Positive value represents loss %)
-   if(m_status.overallPL < 0.0 && m_status.startingBalance > 0.0)
-      m_status.currentOverallDrawdownPercent = (-m_status.overallPL / m_status.startingBalance) * 100.0;
+   //--- Overall Drawdown %
+   double overallBase = (m_config.drawdownModel == DRAWDOWN_STATIC) ? m_status.startingBalance : m_status.highWaterMark;
+   if(m_status.overallPL < 0.0 && overallBase > 0.0)
+      m_status.currentOverallDrawdownPercent = (-m_status.overallPL / overallBase) * 100.0;
    else
       m_status.currentOverallDrawdownPercent = 0.0;
 
    //--- Allowances Remaining in Currency ($)
-   double maxDailyAllowedLossDollars = m_status.dailyStartingEquity * (m_config.maxDailyLossPercent / 100.0);
+   double maxDailyAllowedLossDollars = dailyBase * (m_config.maxDailyLossPercent / 100.0);
    m_status.remainingDailyLossAllowance = maxDailyAllowedLossDollars + m_status.dailyPL;
    if(m_status.remainingDailyLossAllowance < 0.0)
       m_status.remainingDailyLossAllowance = 0.0;
 
-   double maxOverallAllowedLossDollars = m_status.startingBalance * (m_config.maxOverallLossPercent / 100.0);
+   double maxOverallAllowedLossDollars = overallBase * (m_config.maxOverallLossPercent / 100.0);
    m_status.remainingOverallLossAllowance = maxOverallAllowedLossDollars + m_status.overallPL;
    if(m_status.remainingOverallLossAllowance < 0.0)
       m_status.remainingOverallLossAllowance = 0.0;
@@ -170,15 +195,16 @@ void CChallengeProfile::UpdateAccountStatus(double currentBalance, double curren
    if(m_config.profitTargetPercent > 0.0)
      {
       double requiredProfitDollars = m_status.startingBalance * (m_config.profitTargetPercent / 100.0);
-      m_status.targetProgressPercent = (m_status.overallPL / requiredProfitDollars) * 100.0;
+      double totalGainDollars = currentEquity - m_status.startingBalance;
+      m_status.targetProgressPercent = (totalGainDollars / requiredProfitDollars) * 100.0;
       if(m_status.targetProgressPercent < 0.0)
          m_status.targetProgressPercent = 0.0;
-      m_status.isTargetReached = (m_status.overallPL >= requiredProfitDollars);
+      m_status.isTargetReached = (totalGainDollars >= requiredProfitDollars);
      }
    else
      {
       m_status.targetProgressPercent = 100.0;
-      m_status.isTargetReached = false; // Live funded does not stop at profit target
+      m_status.isTargetReached = false;
      }
 
    //--- Rule Violation Flags

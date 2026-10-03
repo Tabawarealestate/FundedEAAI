@@ -71,7 +71,7 @@ void CDashboardPanel::Update(const SChallengeAccountStatus &status, ENUM_EA_STAT
    int x = 20;
    int y = 30;
 
-   CreateLabel(m_prefix + "Title", "=== FUNDED AI EA (PROP CHALLENGE GUARD) ===", x, y, clrGold, 10);
+   CreateLabel(m_prefix + "Title", "=== FUNDED AI EA (RULE-AWARE CHALLENGE GUARD) ===", x, y, clrGold, 10);
    y += 20;
 
    color statusColor = (eaStatus == EA_STATUS_ACTIVE) ? clrLime : ((eaStatus == EA_STATUS_DEFENSIVE) ? clrOrange : clrRed);
@@ -87,7 +87,7 @@ void CDashboardPanel::Update(const SChallengeAccountStatus &status, ENUM_EA_STAT
    CreateLabel(m_prefix + "Target", StringFormat("Target Progress: %.1f%% | Remaining Daily Allowance: $%.2f", status.targetProgressPercent, status.remainingDailyLossAllowance), x, y, clrAqua, 9);
    y += 18;
 
-   CreateLabel(m_prefix + "Regime", StringFormat("Market Regime: %s | Latest Setup Score: %.0f/100", EnumToString(regime), setupScore), x, y, clrYellow, 9);
+   CreateLabel(m_prefix + "Regime", StringFormat("Market Regime: %s | Rule-Based AI Score: %.0f/100", EnumToString(regime), setupScore), x, y, clrYellow, 9);
 
    ChartRedraw(0);
   }

@@ -33,13 +33,13 @@ struct SAISetupScoreResult
   {
    double               totalScore;       // Final aggregated score (0 - 100)
    ENUM_SETUP_QUALITY   qualityCategory;  // VERY_STRONG, QUALIFIED, WATCHLIST, REJECTED
-   string               explanation;      // Concise human-readable explanation
+   string               explanation;      // Rule-based explanation
   };
 
 //+------------------------------------------------------------------+
 //| Class CAIScoringEngine                                           |
-//| Aggregates weighted trade evidence and computes Setup Score      |
-//| (0 - 100) to ensure high-probability trade selection.            |
+//| Rule-Based AI Setup Scoring Engine aggregating trade evidence    |
+//| into a 0 - 100 score to ensure high-probability trade selection. |
 //+------------------------------------------------------------------+
 class CAIScoringEngine
   {
@@ -65,7 +65,7 @@ CAIScoringEngine::~CAIScoringEngine(void)
   }
 
 //+------------------------------------------------------------------+
-//| Evaluates trade setup using weighted scoring model               |
+//| Evaluates trade setup using weighted rule-based scoring model    |
 //+------------------------------------------------------------------+
 SAISetupScoreResult CAIScoringEngine::EvaluateSetup(const SAISetupInput &input)
   {
@@ -120,8 +120,8 @@ SAISetupScoreResult CAIScoringEngine::EvaluateSetup(const SAISetupInput &input)
    else
       result.qualityCategory = SETUP_REJECTED;
 
-   // Generate Concise AI Explanation
-   result.explanation = StringFormat("SETUP SCORE: %.0f/100 | Structure:%s | Liquidity:%s | OB/FVG:%s | HTF:%s | R:R:1:%.1f",
+   // Generate Rule-Based AI Explanation
+   result.explanation = StringFormat("RULE-BASED AI SCORE: %.0f/100 | Struct:%s | Liq:%s | OB/FVG:%s | HTF:%s | R:R:1:%.1f",
                                      score,
                                      input.hasStructureSignal ? "OK" : "NO",
                                      input.hasLiquiditySweep ? "OK" : "NO",

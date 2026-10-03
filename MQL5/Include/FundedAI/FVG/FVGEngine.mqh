@@ -69,21 +69,22 @@ CFVGEngine::~CFVGEngine(void)
 void CFVGEngine::Reset(void)
   {
    m_fvgCount = 0;
-   ArrayInitialize(m_fvgs, 0);
+   ZeroMemory(m_fvgs);
   }
 
 //+------------------------------------------------------------------+
-//| Detects Bullish and Bearish Fair Value Gaps (3-candle imbalance) |
+//| Detects Bullish and Bearish Fair Value Gaps on Completed Bars    |
+//| Starts at i = 2 so low[i-1] evaluates completed bar 1           |
 //+------------------------------------------------------------------+
 bool CFVGEngine::DetectFVGs(const double &high[], const double &low[], const datetime &time[], int totalBars, double minGapPoints, double pointSize)
   {
    Reset();
-   if(totalBars < 4 || pointSize <= 0.0)
+   if(totalBars < 5 || pointSize <= 0.0)
       return false;
 
    double minGapPrice = minGapPoints * pointSize;
 
-   for(int i = 1; i < totalBars - 2 && m_fvgCount < 20; i++)
+   for(int i = 2; i < totalBars - 2 && m_fvgCount < 20; i++)
      {
       // Bullish FVG: Low of candle i-1 is strictly above High of candle i+1
       if(low[i - 1] - high[i + 1] >= minGapPrice)

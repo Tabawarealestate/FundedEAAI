@@ -51,6 +51,7 @@ public:
 
    //--- Error Handler
    static string     GetRetcodeDescription(uint retcode);
+   static bool       IsRetryableError(uint retcode);
 
 private:
    ENUM_ORDER_TYPE_FILLING GetOptimalFillingType(string symbol);
@@ -101,7 +102,21 @@ ENUM_ORDER_TYPE_FILLING CExecutionEngine::GetOptimalFillingType(string symbol)
   }
 
 //+------------------------------------------------------------------+
-//| Executes a market order with failover retries and safeguards      |
+//| Checks whether trade server error is retryable                   |
+//+------------------------------------------------------------------+
+bool CExecutionEngine::IsRetryableError(uint retcode)
+  {
+   if(retcode == TRADE_RETCODE_REQUOTE ||
+      retcode == TRADE_RETCODE_PRICE_OFF ||
+      retcode == TRADE_RETCODE_PRICE_CHANGED ||
+      retcode == TRADE_RETCODE_TIMEOUT ||
+      retcode == TRADE_RETCODE_TOO_MANY_REQUESTS)
+      return true;
+   return false;
+  }
+
+//+------------------------------------------------------------------+
+//| Executes a market order with selective retries and safeguards    |
 //+------------------------------------------------------------------+
 SExecutionResult CExecutionEngine::OpenMarketOrder(string symbol, ENUM_ORDER_TYPE orderType, double lotSize, double stopLoss, double takeProfit, string comment)
   {
@@ -120,7 +135,7 @@ SExecutionResult CExecutionEngine::OpenMarketOrder(string symbol, ENUM_ORDER_TYP
      }
 
    SSymbolSpecification spec;
-   if(!CSymbolUtils::GetSymbolSpec(symbol, spec))
+   if(!CSymbolUtils::GetSymbolSpec(symbol, spec, 10))
      {
       result.errorMessage = "SYMBOL ERROR: Could not fetch symbol specs";
       return result;
@@ -132,10 +147,8 @@ SExecutionResult CExecutionEngine::OpenMarketOrder(string symbol, ENUM_ORDER_TYP
       return result;
      }
 
-   // Set optimal filling mode dynamically
    m_trade.SetTypeFilling(GetOptimalFillingType(symbol));
 
-   // Retry Loop for Execution Robustness
    for(int attempt = 1; attempt <= m_maxRetries; attempt++)
      {
       bool success = false;
@@ -157,7 +170,12 @@ SExecutionResult CExecutionEngine::OpenMarketOrder(string symbol, ENUM_ORDER_TYP
         }
 
       result.errorMessage = StringFormat("Attempt %d failed: %s (Code: %u)", attempt, GetRetcodeDescription(result.retcode), result.retcode);
-      Sleep(200 * attempt); // Pause before retry
+
+      // Do not retry non-retryable errors (e.g., insufficient funds, invalid stops)
+      if(!IsRetryableError(result.retcode))
+         break;
+
+      Sleep(200 * attempt);
      }
 
    return result;
@@ -172,7 +190,7 @@ bool CExecutionEngine::ClosePositionByTicket(ulong ticket)
   }
 
 //+------------------------------------------------------------------+
-//| Emergency Liquidator: Closes all open EA positions               |
+//| Account-Wide Emergency Liquidator: Closes all open EA positions  |
 //+------------------------------------------------------------------+
 bool CExecutionEngine::CloseAllPositions(string symbol)
   {

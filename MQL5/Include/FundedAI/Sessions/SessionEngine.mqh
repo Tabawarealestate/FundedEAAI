@@ -23,7 +23,7 @@ enum ENUM_TRADING_SESSION
 
 //+------------------------------------------------------------------+
 //| Class CSessionEngine                                             |
-//| Analyzes market sessions, trading hours, and time filters.       |
+//| Analyzes market sessions, trading hours, and GMT time filters.   |
 //+------------------------------------------------------------------+
 class CSessionEngine
   {
@@ -31,8 +31,9 @@ public:
                      CSessionEngine(void);
                     ~CSessionEngine(void);
 
-   static bool       IsOptimalTradingSession(datetime timeCurrent);
-   static bool       IsWeekend(datetime timeCurrent);
+   static ENUM_TRADING_SESSION GetCurrentSession(datetime timeCurrent, int gmtOffsetHours = 2);
+   static bool                 IsOptimalTradingSession(datetime timeCurrent, int gmtOffsetHours = 2);
+   static bool                 IsWeekend(datetime timeCurrent);
   };
 
 //+------------------------------------------------------------------+
@@ -50,12 +51,32 @@ CSessionEngine::~CSessionEngine(void)
   }
 
 //+------------------------------------------------------------------+
+//| Returns current active trading session adjusted for GMT Offset   |
+//+------------------------------------------------------------------+
+ENUM_TRADING_SESSION CSessionEngine::GetCurrentSession(datetime timeCurrent, int gmtOffsetHours)
+  {
+   datetime gmtTime = timeCurrent - (gmtOffsetHours * 3600);
+   MqlDateTime dt;
+   TimeToStruct(gmtTime, dt);
+
+   if(dt.hour >= 13 && dt.hour < 16)
+      return SESSION_OVERLAP;
+   if(dt.hour >= 8 && dt.hour < 16)
+      return SESSION_LONDON;
+   if(dt.hour >= 13 && dt.hour < 21)
+      return SESSION_NEW_YORK;
+
+   return SESSION_ASIAN;
+  }
+
+//+------------------------------------------------------------------+
 //| Evaluates if current hour falls within London or NY sessions     |
 //+------------------------------------------------------------------+
-bool CSessionEngine::IsOptimalTradingSession(datetime timeCurrent)
+bool CSessionEngine::IsOptimalTradingSession(datetime timeCurrent, int gmtOffsetHours)
   {
+   datetime gmtTime = timeCurrent - (gmtOffsetHours * 3600);
    MqlDateTime dt;
-   TimeToStruct(timeCurrent, dt);
+   TimeToStruct(gmtTime, dt);
 
    // London & New York Active Trading Window (07:00 to 20:00 UTC)
    if(dt.hour >= 7 && dt.hour <= 20)

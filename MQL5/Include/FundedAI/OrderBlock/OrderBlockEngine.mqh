@@ -69,7 +69,7 @@ COrderBlockEngine::~COrderBlockEngine(void)
 void COrderBlockEngine::Reset(void)
   {
    m_obCount = 0;
-   ArrayInitialize(m_orderBlocks, 0);
+   ZeroMemory(m_orderBlocks);
   }
 
 //+------------------------------------------------------------------+

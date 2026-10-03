@@ -56,6 +56,7 @@ void CTradeManager::Init(ulong magicNumber)
 
 //+------------------------------------------------------------------+
 //| Manages active positions: Break-Even & Trailing Stop             |
+//| Safeguard: Never moves SL farther away from current market price |
 //+------------------------------------------------------------------+
 void CTradeManager::ManageOpenPositions(string symbol, double breakEvenRatio, double trailingStopPoints, double pointSize)
   {
@@ -78,13 +79,15 @@ void CTradeManager::ManageOpenPositions(string symbol, double breakEvenRatio, do
             double profitPoints = (currentPrice - openPrice) / pointSize;
             double initialRiskPoints = (openPrice - currentSL) / pointSize;
 
-            // 1. Move SL to Break-Even when profit reaches BreakEvenRatio * R
+            // 1. Move SL to Break-Even (Only move SL higher)
             if(initialRiskPoints > 0.0 && profitPoints >= (initialRiskPoints * breakEvenRatio) && currentSL < openPrice)
               {
-               m_trade.PositionModify(ticket, openPrice + (5.0 * pointSize), currentTP);
+               double newSL = openPrice + (5.0 * pointSize);
+               if(newSL > currentSL)
+                  m_trade.PositionModify(ticket, NormalizeDouble(newSL, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS)), currentTP);
               }
 
-            // 2. Trailing Stop
+            // 2. Trailing Stop (Only move SL higher)
             if(trailingStopPoints > 0.0 && profitPoints >= trailingStopPoints)
               {
                double newSL = currentPrice - (trailingStopPoints * pointSize);
@@ -99,13 +102,15 @@ void CTradeManager::ManageOpenPositions(string symbol, double breakEvenRatio, do
             double profitPoints = (openPrice - currentPrice) / pointSize;
             double initialRiskPoints = (currentSL - openPrice) / pointSize;
 
-            // 1. Move SL to Break-Even
+            // 1. Move SL to Break-Even (Only move SL lower)
             if(initialRiskPoints > 0.0 && profitPoints >= (initialRiskPoints * breakEvenRatio) && (currentSL > openPrice || currentSL == 0.0))
               {
-               m_trade.PositionModify(ticket, openPrice - (5.0 * pointSize), currentTP);
+               double newSL = openPrice - (5.0 * pointSize);
+               if(currentSL == 0.0 || newSL < currentSL)
+                  m_trade.PositionModify(ticket, NormalizeDouble(newSL, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS)), currentTP);
               }
 
-            // 2. Trailing Stop
+            // 2. Trailing Stop (Only move SL lower)
             if(trailingStopPoints > 0.0 && profitPoints >= trailingStopPoints)
               {
                double newSL = currentPrice + (trailingStopPoints * pointSize);
@@ -120,7 +125,7 @@ void CTradeManager::ManageOpenPositions(string symbol, double breakEvenRatio, do
   }
 
 //+------------------------------------------------------------------+
-//| Scans closed trade history to count consecutive losses           |
+//| Scans closed trade deal history to count consecutive losses      |
 //+------------------------------------------------------------------+
 int CTradeManager::GetConsecutiveLossCount(ulong magicNumber)
   {

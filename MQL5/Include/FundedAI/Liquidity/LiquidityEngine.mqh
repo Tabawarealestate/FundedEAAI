@@ -69,16 +69,16 @@ void CLiquidityEngine::SetSessionLiquidity(double prevHigh, double prevLow)
   }
 
 //+------------------------------------------------------------------+
-//| Detects BSL / SSL liquidity sweeps (stop run + rejection)        |
+//| Detects BSL / SSL liquidity sweeps on completed bar index 1      |
 //+------------------------------------------------------------------+
 ENUM_LIQUIDITY_SWEEP CLiquidityEngine::DetectSweep(const double &open[], const double &high[], const double &low[], const double &close[], double levelHigh, double levelLow)
   {
-   // BSL Sweep: High breaks above key resistance/liquidity, but Close drops back below
-   if(levelHigh > 0.0 && high[0] > levelHigh && close[0] < levelHigh)
+   // BSL Sweep: Completed bar 1 high breaks above key resistance/liquidity, but Close drops back below
+   if(levelHigh > 0.0 && high[1] > levelHigh && close[1] < levelHigh)
       return SWEEP_BUY_SIDE_LIQUIDITY;
 
-   // SSL Sweep: Low pierces below key support/liquidity, but Close recovers back above
-   if(levelLow > 0.0 && low[0] < levelLow && close[0] > levelLow)
+   // SSL Sweep: Completed bar 1 low pierces below key support/liquidity, but Close recovers back above
+   if(levelLow > 0.0 && low[1] < levelLow && close[1] > levelLow)
       return SWEEP_SELL_SIDE_LIQUIDITY;
 
    return SWEEP_NONE;

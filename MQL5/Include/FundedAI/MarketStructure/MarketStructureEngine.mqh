@@ -84,21 +84,23 @@ void CMarketStructureEngine::Reset(void)
   {
    m_highCount = 0;
    m_lowCount  = 0;
-   ArrayInitialize(m_recentHighs, 0);
-   ArrayInitialize(m_recentLows, 0);
+   ZeroMemory(m_recentHighs);
+   ZeroMemory(m_recentLows);
   }
 
 //+------------------------------------------------------------------+
 //| Scans price series for fractal swing highs and swing lows        |
+//| Chronological Recency: Index 0 is the most recent confirmed swing|
+//| Strictly evaluates completed bars (starts at swingDepth + 1)     |
 //+------------------------------------------------------------------+
 bool CMarketStructureEngine::FindSwingPoints(const double &high[], const double &low[], const datetime &time[], int totalBars, int swingDepth)
   {
    Reset();
-   if(totalBars < (swingDepth * 2 + 1))
+   if(totalBars < (swingDepth * 2 + 2))
       return false;
 
-   // Loop through historical bars (excluding current unclosed bar 0)
-   for(int i = swingDepth; i < totalBars - swingDepth; i++)
+   // Start loop at swingDepth + 1 to ensure i - j >= 1 (excluding unclosed bar 0)
+   for(int i = swingDepth + 1; i < totalBars - swingDepth; i++)
      {
       bool isSwingHigh = true;
       bool isSwingLow  = true;
@@ -135,59 +137,58 @@ bool CMarketStructureEngine::FindSwingPoints(const double &high[], const double 
 
 //+------------------------------------------------------------------+
 //| Evaluates Break of Structure (BOS) / CHoCH / MSS                 |
+//| Anti-Look-Ahead: Evaluates completed candle close[1] vs swings   |
 //+------------------------------------------------------------------+
 ENUM_STRUCTURE_SIGNAL CMarketStructureEngine::AnalyzeStructure(const double &close[], const double &high[], const double &low[], int totalBars)
   {
-   if(m_highCount < 2 || m_lowCount < 2 || totalBars < 2)
+   if(m_highCount < 2 || m_lowCount < 2 || totalBars < 3)
       return STRUCTURE_NONE;
 
-   double currentClose = close[0];
-   double prevClose    = close[1];
+   double completedClose = close[1];
+   double prevClose      = close[2];
 
-   // Check Bullish BOS / CHoCH / MSS (Price closes above recent swing high)
-   if(currentClose > m_recentHighs[0].price && prevClose <= m_recentHighs[0].price)
+   // Bullish Break of completed candle close[1] above recent swing high
+   if(completedClose > m_recentHighs[0].price && prevClose <= m_recentHighs[0].price)
      {
-      // If previous trend was lower high -> lower low, close above high is CHoCH / MSS
       if(m_recentHighs[0].price < m_recentHighs[1].price)
-         return STRUCTURE_CHOCH_BULLISH;
+         return STRUCTURE_CHOCH_BULLISH; // Trend Reversal
       else
-         return STRUCTURE_BOS_BULLISH;
+         return STRUCTURE_BOS_BULLISH;   // Trend Continuation
      }
 
-   // Check Bearish BOS / CHoCH / MSS (Price closes below recent swing low)
-   if(currentClose < m_recentLows[0].price && prevClose >= m_recentLows[0].price)
+   // Bearish Break of completed candle close[1] below recent swing low
+   if(completedClose < m_recentLows[0].price && prevClose >= m_recentLows[0].price)
      {
-      // If previous trend was higher low -> higher high, close below low is CHoCH / MSS
       if(m_recentLows[0].price > m_recentLows[1].price)
-         return STRUCTURE_CHOCH_BEARISH;
+         return STRUCTURE_CHOCH_BEARISH; // Trend Reversal
       else
-         return STRUCTURE_BOS_BEARISH;
+         return STRUCTURE_BOS_BEARISH;   // Trend Continuation
      }
 
    return STRUCTURE_NONE;
   }
 
 //+------------------------------------------------------------------+
-//| Returns latest swing high                                        |
+//| Returns chronologically latest confirmed swing high              |
 //+------------------------------------------------------------------+
 bool CMarketStructureEngine::GetLatestSwingHigh(SSwingPoint &high) const
   {
    if(m_highCount > 0)
      {
-      high = m_recentHighs[0];
+      high = m_recentHighs[0]; // Index 0 is chronologically most recent
       return true;
      }
    return false;
   }
 
 //+------------------------------------------------------------------+
-//| Returns latest swing low                                         |
+//| Returns chronologically latest confirmed swing low               |
 //+------------------------------------------------------------------+
 bool CMarketStructureEngine::GetLatestSwingLow(SSwingPoint &low) const
   {
    if(m_lowCount > 0)
      {
-      low = m_recentLows[0];
+      low = m_recentLows[0]; // Index 0 is chronologically most recent
       return true;
      }
    return false;

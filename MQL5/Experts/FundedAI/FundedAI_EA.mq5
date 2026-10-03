@@ -16,32 +16,47 @@
 #include <FundedAI/Challenge/ChallengeGuard.mqh>
 #include <FundedAI/Risk/PositionSizer.mqh>
 #include <FundedAI/Risk/DynamicRiskManager.mqh>
+#include <FundedAI/Portfolio/PortfolioManager.mqh>
 #include <FundedAI/Utils/SymbolUtils.mqh>
 #include <FundedAI/Strategy/StrategyManager.mqh>
 #include <FundedAI/Execution/ExecutionEngine.mqh>
 #include <FundedAI/TradeManagement/TradeManager.mqh>
 #include <FundedAI/Dashboard/DashboardPanel.mqh>
 #include <FundedAI/Sessions/SessionEngine.mqh>
+#include <FundedAI/News/NewsFilterEngine.mqh>
+#include <FundedAI/Alerts/AlertManager.mqh>
+#include <FundedAI/Journal/TradeJournaler.mqh>
 
 //+------------------------------------------------------------------+
 //| INPUT PARAMETERS                                                 |
 //+------------------------------------------------------------------+
-input string               Inp_Section1            = "=== CHALLENGE PROFILE ==="; // --- ACCOUNT & CHALLENGE ---
-input double               Inp_AccountBalance      = 100000.0;                   // Initial Challenge Balance ($)
-input ENUM_CHALLENGE_PHASE Inp_ChallengePhase      = CHALLENGE_PHASE_1;          // Evaluation Phase
-input double               Inp_ProfitTarget        = 10.0;                       // Profit Target (%)
-input double               Inp_MaxDailyLoss        = 5.0;                        // Max Daily Loss Limit (%)
-input double               Inp_MaxOverallLoss      = 10.0;                       // Max Overall Drawdown (%)
+input string                 Inp_Section1            = "=== CHALLENGE PROFILE ==="; // --- ACCOUNT & CHALLENGE ---
+input double                 Inp_AccountBalance      = 100000.0;                   // Initial Challenge Balance ($)
+input ENUM_CHALLENGE_PHASE   Inp_ChallengePhase      = CHALLENGE_PHASE_1;          // Evaluation Phase
+input ENUM_DAILY_LOSS_MODE   Inp_DailyLossMode       = DAILY_LOSS_MODE_A_EQUITY;   // Daily Loss Calculation Mode
+input ENUM_DRAWDOWN_MODEL    Inp_DrawdownModel       = DRAWDOWN_STATIC;            // Drawdown Model (Static / Trailing)
+input double                 Inp_ProfitTarget        = 10.0;                       // Profit Target (%)
+input double                 Inp_MaxDailyLoss        = 5.0;                        // Max Daily Loss Limit (%)
+input double                 Inp_MaxOverallLoss      = 10.0;                       // Max Overall Drawdown (%)
+input int                    Inp_MinTradingDays      = 4;                          // Minimum Required Trading Days
+input bool                   Inp_AllowWeekendHolding = false;                      // Allow Weekend Holding
+input bool                   Inp_AllowOvernightTrade = true;                       // Allow Overnight Holding
 
-input string               Inp_Section2            = "=== RISK CONTROL ===";     // --- RISK CONTROL ---
-input ENUM_RISK_MODE       Inp_RiskMode            = RISK_MODE_BALANCED;         // Risk Strategy Mode
-input double               Inp_RiskPercent         = 0.25;                       // Risk per Trade (%)
-input int                  Inp_MaxOpenPositions    = 3;                          // Max Open Positions
+input string                 Inp_Section2            = "=== RISK CONTROL ===";     // --- RISK CONTROL ---
+input ENUM_RISK_MODE         Inp_RiskMode            = RISK_MODE_BALANCED;         // Risk Strategy Mode
+input double                 Inp_RiskPercent         = 0.25;                       // Risk per Trade (%)
+input int                    Inp_MaxOpenPositions    = 3;                          // Max Open Positions
+input double                 Inp_MaxPortfolioRisk    = 2.0;                        // Max Portfolio Risk (%)
 
-input string               Inp_Section3            = "=== SAFETIES & SPREAD ==="; // --- SAFETY & EXECUTION ---
-input int                  Inp_MaxSpreadPoints     = 30;                         // Max Allowed Spread (Points)
-input int                  Inp_MaxSlippagePoints   = 10;                         // Max Allowed Slippage (Points)
-input ulong                Inp_MagicNumber         = FUNDED_AI_DEFAULT_MAGIC;    // Magic Number
+input string                 Inp_Section3            = "=== TIMEFRAMES & STRATEGY ===";// --- TIMEFRAMES ---
+input ENUM_TIMEFRAMES        Inp_HTFTimeframe        = PERIOD_H4;                  // Higher Timeframe Trend Bias
+input ENUM_TIMEFRAMES        Inp_LTFTimeframe        = PERIOD_M15;                 // Lower Timeframe Entry
+
+input string                 Inp_Section4            = "=== SAFETIES & SPREAD ==="; // --- SAFETY & EXECUTION ---
+input int                    Inp_MaxSpreadPoints     = 30;                         // Max Allowed Spread (Points)
+input int                    Inp_MaxSlippagePoints   = 10;                         // Max Allowed Slippage (Points)
+input bool                   Inp_EnableNewsFilter    = true;                       // Enforce High Impact News Protection
+input ulong                  Inp_MagicNumber         = FUNDED_AI_DEFAULT_MAGIC;    // Magic Number
 
 //+------------------------------------------------------------------+
 //| GLOBAL OBJECTS                                                   |
@@ -49,23 +64,31 @@ input ulong                Inp_MagicNumber         = FUNDED_AI_DEFAULT_MAGIC;   
 CChallengeProfile   g_profile;
 CChallengeGuard     g_guard;
 CDynamicRiskManager g_riskManager;
+CPortfolioManager   g_portfolioManager;
 CStrategyManager    g_strategyManager;
 CExecutionEngine    g_executionEngine;
 CTradeManager       g_tradeManager;
 CDashboardPanel     g_dashboard;
+CNewsFilterEngine   g_newsEngine;
+CAlertManager       g_alertManager;
+CTradeJournaler     g_journaler;
 
-double              g_dailyStartingEquity = 0.0;
-datetime            g_lastDayChecked      = 0;
-datetime            g_lastBarTime         = 0;
-int                 g_consecutiveLosses   = 0;
-double              g_latestSetupScore    = 0.0;
+double              g_dailyStartingEquity  = 0.0;
+double              g_dailyStartingBalance = 0.0;
+datetime            g_lastDayChecked       = 0;
+datetime            g_lastBarTime          = 0;
+int                 g_consecutiveLosses    = 0;
+int                 g_activeTradingDays    = 0;
+bool                g_tradedToday          = false;
+double              g_latestSetupScore     = 0.0;
+ENUM_MARKET_REGIME  g_latestRegime         = REGIME_RANGE;
 
 //+------------------------------------------------------------------+
 //| Helper Function: New Bar Detection                               |
 //+------------------------------------------------------------------+
 bool IsNewBar(void)
   {
-   datetime currentBarTime = iTime(_Symbol, _Period, 0);
+   datetime currentBarTime = iTime(_Symbol, Inp_LTFTimeframe, 0);
    if(currentBarTime != g_lastBarTime)
      {
       g_lastBarTime = currentBarTime;
@@ -81,20 +104,23 @@ int OnInit()
   {
    // 1. Initialize Challenge Profile
    SChallengeProfileConfig config;
-   config.profileName               = "User Configured Profile";
+   config.profileName               = "Configured Prop Profile";
    config.initialBalance            = Inp_AccountBalance;
    config.phase                     = Inp_ChallengePhase;
+   config.dailyLossMode             = Inp_DailyLossMode;
+   config.drawdownModel             = Inp_DrawdownModel;
    config.profitTargetPercent     = Inp_ProfitTarget;
    config.maxDailyLossPercent       = Inp_MaxDailyLoss;
    config.maxOverallLossPercent     = Inp_MaxOverallLoss;
-   config.minTradingDays            = 4;
+   config.minTradingDays            = Inp_MinTradingDays;
    config.maxTradingDays            = 0;
-   config.allowWeekendHolding       = false;
-   config.allowNewsTrading          = false;
-   config.allowOvernightTrading     = true;
+   config.allowWeekendHolding       = Inp_AllowWeekendHolding;
+   config.allowNewsTrading          = !Inp_EnableNewsFilter;
+   config.allowOvernightTrading     = Inp_AllowOvernightTrade;
    config.maxOpenPositions          = Inp_MaxOpenPositions;
+   config.maxPortfolioRiskPercent   = Inp_MaxPortfolioRisk;
    config.maxLotSize                = 0.0;
-   config.customRulesDescription    = "Live MT5 Challenge Enforcement";
+   config.customRulesDescription    = "Live Rule-Aware Enforcement";
 
    config.dailyLossWarningPercent   = Inp_MaxDailyLoss * 0.60;
    config.dailyLossSoftStopPercent  = Inp_MaxDailyLoss * 0.80;
@@ -105,18 +131,23 @@ int OnInit()
    g_profile.Configure(config);
    g_guard.SetProfile(&g_profile);
 
-   // 2. Initialize Risk, Execution, Trade Manager & Dashboard
+   // 2. Initialize Engines
    g_riskManager.SetRiskMode(Inp_RiskMode, Inp_RiskPercent);
+   g_portfolioManager.Init(Inp_MagicNumber);
    g_executionEngine.Init(Inp_MagicNumber, Inp_MaxSlippagePoints, 3);
    g_tradeManager.Init(Inp_MagicNumber);
    g_dashboard.Init("FundedAI_Dash_");
+   g_newsEngine.SetEnabled(Inp_EnableNewsFilter);
+   g_alertManager.Init(true, true, true);
+   g_journaler.Init("FundedAI_Trade_Journal.csv");
 
-   // 3. Initialize Starting Equity
-   g_dailyStartingEquity = AccountInfoDouble(ACCOUNT_EQUITY);
-   g_lastDayChecked      = TimeCurrent();
+   // 3. Initialize Starting Equity & Balance
+   g_dailyStartingEquity  = AccountInfoDouble(ACCOUNT_EQUITY);
+   g_dailyStartingBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+   g_lastDayChecked       = TimeCurrent();
 
-   EventSetTimer(1); // Set 1-second timer for continuous guard evaluation & dashboard update
-   Print("FUNDED AI EA initialized successfully. Mode: ", EnumToString(Inp_RiskMode));
+   EventSetTimer(1);
+   Print("FUNDED AI EA initialized successfully. Daily Loss Mode: ", EnumToString(Inp_DailyLossMode), " Drawdown Model: ", EnumToString(Inp_DrawdownModel));
    return(INIT_SUCCEEDED);
   }
 
@@ -139,31 +170,51 @@ void OnTimer()
    MqlDateTime dt;
    TimeToStruct(now, dt);
 
-   // Detect New Trading Day (Midnight Reset)
+   // Detect New Trading Day (Midnight Reset & Trade-Based Day Counter)
    MqlDateTime lastDt;
    TimeToStruct(g_lastDayChecked, lastDt);
    if(dt.day != lastDt.day)
      {
-      g_dailyStartingEquity = AccountInfoDouble(ACCOUNT_EQUITY);
-      g_lastDayChecked      = now;
-      Print("NEW TRADING DAY DETECTED. Reset daily starting equity to: $", DoubleToString(g_dailyStartingEquity, 2));
+      if(g_tradedToday)
+        {
+         g_activeTradingDays++;
+         g_tradedToday = false;
+        }
+      g_dailyStartingEquity  = AccountInfoDouble(ACCOUNT_EQUITY);
+      g_dailyStartingBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+      g_lastDayChecked       = now;
+      Print("NEW TRADING DAY DETECTED. Active Day Count: #", g_activeTradingDays, " Daily starting equity: $", DoubleToString(g_dailyStartingEquity, 2));
      }
 
    // Evaluate Safety Guard State
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    double equity  = AccountInfoDouble(ACCOUNT_EQUITY);
-   ENUM_EA_STATUS status = g_guard.EvaluateState(balance, equity, g_dailyStartingEquity);
+   ENUM_EA_STATUS status = g_guard.EvaluateState(balance, equity, g_dailyStartingEquity, g_dailyStartingBalance, g_activeTradingDays);
 
    // Update consecutive loss tracker from closed trade deals
    g_consecutiveLosses = g_tradeManager.GetConsecutiveLossCount(Inp_MagicNumber);
 
-   // Update Dashboard Visual Panel
-   g_dashboard.Update(g_profile.GetStatus(), status, REGIME_STRONG_BULL_TREND, g_latestSetupScore, g_guard.GetStatusReason());
+   // Weekend Holding Rule Enforcement (Close trades Friday evening if holding prohibited)
+   if(!Inp_AllowWeekendHolding && dt.day_of_week == 5 && dt.hour >= 21)
+     {
+      g_executionEngine.CloseAllPositions(""); // Account-wide weekend liquidation
+      g_alertManager.SendRiskAlert("WEEKEND RULE ENFORCED", "Closing all trades before weekend market close.");
+     }
+
+   // Overnight Holding Rule Enforcement (Close trades before midnight if holding prohibited)
+   if(!Inp_AllowOvernightTrade && dt.hour >= 23)
+     {
+      g_executionEngine.CloseAllPositions(""); // Account-wide overnight liquidation
+      g_alertManager.SendRiskAlert("OVERNIGHT RULE ENFORCED", "Closing all trades before overnight market rollover.");
+     }
+
+   // Update Dashboard Visual Panel with Live Calculated Regime
+   g_dashboard.Update(g_profile.GetStatus(), status, g_latestRegime, g_latestSetupScore, g_guard.GetStatusReason());
 
    // Emergency Liquidation if Safety Guard triggers Lockdown
    if(g_guard.ShouldCloseAllPositions())
      {
-      g_executionEngine.CloseAllPositions(_Symbol);
+      g_executionEngine.CloseAllPositions(""); // Account-wide emergency liquidation across all symbols
      }
   }
 
@@ -182,10 +233,20 @@ void OnTick()
    // Evaluate Guard State
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    double equity  = AccountInfoDouble(ACCOUNT_EQUITY);
-   ENUM_EA_STATUS status = g_guard.EvaluateState(balance, equity, g_dailyStartingEquity);
+   ENUM_EA_STATUS status = g_guard.EvaluateState(balance, equity, g_dailyStartingEquity, g_dailyStartingBalance, g_activeTradingDays);
 
    if(!g_guard.CanOpenNewTrade())
       return; // Block entry scanning if paused or stopped
+
+   // News Protection Rule: Block entries if news protection enabled but feed unattached
+   if(g_newsEngine.ShouldBlockTradingForNews())
+      return;
+
+   // Overnight Rule Entry Block: Do not open new entries late at night if overnight trading disabled
+   MqlDateTime currentDt;
+   TimeToStruct(TimeCurrent(), currentDt);
+   if(!Inp_AllowOvernightTrade && currentDt.hour >= 22)
+      return;
 
    // Prevent tick-spamming: only scan for new entry signals on a NEW BAR
    if(!IsNewBar())
@@ -195,17 +256,27 @@ void OnTick()
    if(!CSymbolUtils::ValidateMarketData(_Symbol, Inp_MaxSpreadPoints, 10))
       return;
 
-   // Check Max Position Limit
+   // Check Max Open Position & Max Portfolio Risk Limits (With Selected Ticket Selection)
    int openCount = 0;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
      {
-      if(PositionGetInteger(POSITION_MAGIC) == (long)Inp_MagicNumber)
-         openCount++;
+      ulong posTicket = PositionGetTicket(i);
+      if(posTicket > 0)
+        {
+         if(PositionGetInteger(POSITION_MAGIC) == (long)Inp_MagicNumber)
+            openCount++;
+        }
      }
    if(openCount >= Inp_MaxOpenPositions)
       return;
 
-   // Fetch Bar Data
+   if(g_portfolioManager.GetTotalPortfolioRiskPercent(equity) >= Inp_MaxPortfolioRisk)
+      return;
+
+   if(g_portfolioManager.IsCurrencyExposureAtLimit(_Symbol, 2))
+      return;
+
+   // Fetch Lower Timeframe Bar Data for Setup
    double close[], high[], low[], open[];
    datetime time[];
    ArraySetAsSeries(close, true);
@@ -214,18 +285,19 @@ void OnTick()
    ArraySetAsSeries(open, true);
    ArraySetAsSeries(time, true);
 
-   int copied = CopyClose(_Symbol, _Period, 0, 100, close);
-   CopyHigh(_Symbol, _Period, 0, 100, high);
-   CopyLow(_Symbol, _Period, 0, 100, low);
-   CopyOpen(_Symbol, _Period, 0, 100, open);
-   CopyTime(_Symbol, _Period, 0, 100, time);
+   int copied = CopyClose(_Symbol, Inp_LTFTimeframe, 0, 100, close);
+   CopyHigh(_Symbol, Inp_LTFTimeframe, 0, 100, high);
+   CopyLow(_Symbol, Inp_LTFTimeframe, 0, 100, low);
+   CopyOpen(_Symbol, Inp_LTFTimeframe, 0, 100, open);
+   CopyTime(_Symbol, Inp_LTFTimeframe, 0, 100, time);
 
    if(copied < 50)
       return;
 
    // Evaluate Multi-Timeframe Setup Signal
-   STradeSignal signal = g_strategyManager.EvaluateMarket(_Symbol, PERIOD_H1, _Period, close, high, low, open, time, copied, Inp_MaxSpreadPoints, MIN_SETUP_SCORE_THRESHOLD);
+   STradeSignal signal = g_strategyManager.EvaluateMarket(_Symbol, Inp_HTFTimeframe, Inp_LTFTimeframe, close, high, low, open, time, copied, Inp_MaxSpreadPoints, MIN_SETUP_SCORE_THRESHOLD);
    g_latestSetupScore = signal.scoreResult.totalScore;
+   g_latestRegime     = signal.detectedRegime;
 
    if(signal.hasSignal && signal.scoreResult.totalScore >= MIN_SETUP_SCORE_THRESHOLD)
      {
@@ -239,11 +311,15 @@ void OnTick()
       if(lot > 0.0)
         {
          ENUM_ORDER_TYPE orderType = signal.isBuy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+         string dirStr = signal.isBuy ? "BUY" : "SELL";
+
          SExecutionResult res = g_executionEngine.OpenMarketOrder(_Symbol, orderType, lot, signal.stopLossPrice, signal.takeProfitPrice, "FUNDED_AI_ENTRY");
 
          if(res.isSuccess)
            {
-            Print("TRADE EXECUTED: ", res.errorMessage, " Ticket: ", res.ticket, " AI Score: ", signal.scoreResult.totalScore);
+            g_tradedToday = true; // Mark trade executed today for trade-based day counting
+            g_alertManager.SendTradeAlert(_Symbol, dirStr, signal.suggestedEntry, signal.stopLossPrice, signal.takeProfitPrice, signal.scoreResult.totalScore);
+            g_journaler.LogTrade(TimeCurrent(), _Symbol, dirStr, signal.suggestedEntry, signal.stopLossPrice, signal.takeProfitPrice, lot, g_riskManager.GetBaseRiskPercent() * riskMult, signal.scoreResult.totalScore, EnumToString(signal.detectedRegime), signal.scoreResult.explanation);
            }
         }
      }

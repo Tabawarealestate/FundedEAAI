@@ -55,7 +55,7 @@ CIndicatorEngine::~CIndicatorEngine(void)
   }
 
 //+------------------------------------------------------------------+
-//| Calculates RSI value from close price array                      |
+//| Calculates Wilder's Smoothed RSI value from close price array    |
 //+------------------------------------------------------------------+
 double CIndicatorEngine::CalculateRSI(const double &close[], int period)
   {
@@ -66,7 +66,8 @@ double CIndicatorEngine::CalculateRSI(const double &close[], int period)
    double gainSum = 0.0;
    double lossSum = 0.0;
 
-   for(int i = 0; i < period; i++)
+   // Initial SMA calculation for first period
+   for(int i = total - 2; i >= total - 1 - period; i--)
      {
       double diff = close[i] - close[i + 1];
       if(diff > 0.0)
@@ -77,6 +78,17 @@ double CIndicatorEngine::CalculateRSI(const double &close[], int period)
 
    double avgGain = gainSum / period;
    double avgLoss = lossSum / period;
+
+   // Wilder's Exponential Smoothing
+   for(int i = total - 2 - period; i >= 0; i--)
+     {
+      double diff = close[i] - close[i + 1];
+      double gain = (diff > 0.0) ? diff : 0.0;
+      double loss = (diff < 0.0) ? -diff : 0.0;
+
+      avgGain = ((avgGain * (period - 1)) + gain) / period;
+      avgLoss = ((avgLoss * (period - 1)) + loss) / period;
+     }
 
    if(avgLoss == 0.0)
       return 100.0;

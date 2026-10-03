@@ -9,7 +9,6 @@
 
 #include "../Core/Constants.mqh"
 #include "../Core/Types.mqh"
-#include "../Utils/SymbolUtils.mqh"
 
 //+------------------------------------------------------------------+
 //| Class CMarketRegimeEngine                                        |
@@ -64,6 +63,7 @@ CMarketRegimeEngine::~CMarketRegimeEngine(void)
 
 //+------------------------------------------------------------------+
 //| Classifies current market regime using price metrics             |
+//| Current ATR is compared against a 100-period baseline Average ATR|
 //+------------------------------------------------------------------+
 ENUM_MARKET_REGIME CMarketRegimeEngine::ClassifyRegime(string symbol,
                                                        ENUM_TIMEFRAMES timeframe,
@@ -77,7 +77,7 @@ ENUM_MARKET_REGIME CMarketRegimeEngine::ClassifyRegime(string symbol,
    m_fastMA     = fastMAVal;
    m_slowMA     = slowMAVal;
    m_currentATR  = atrVal;
-   m_averageATR = avgATRVal;
+   m_averageATR = (avgATRVal > 0.0) ? avgATRVal : atrVal;
 
    // 1. Check for Abnormal Volatility or Excessive Spread
    if(maxSpreadPoints > 0 && currentSpreadPoints > maxSpreadPoints)
