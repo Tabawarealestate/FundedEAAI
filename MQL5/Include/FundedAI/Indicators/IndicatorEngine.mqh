@@ -60,7 +60,7 @@ CIndicatorEngine::~CIndicatorEngine(void)
 double CIndicatorEngine::CalculateRSI(const double &close[], int period)
   {
    int total = ArraySize(close);
-   if(total < period + 1)
+   if(total < period + 2)
       return 50.0;
 
    double gainSum = 0.0;
@@ -103,7 +103,7 @@ double CIndicatorEngine::CalculateRSI(const double &close[], int period)
 double CIndicatorEngine::CalculateATR(const double &high[], const double &low[], const double &close[], int period)
   {
    int total = ArraySize(high);
-   if(total < period + 1)
+   if(total < period + 2)
       return 0.0;
 
    double trSum = 0.0;

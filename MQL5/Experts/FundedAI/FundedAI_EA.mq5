@@ -352,11 +352,6 @@ void OnTick()
    // Fetch Lower Timeframe Bar Data for Setup
    double close[], high[], low[], open[];
    datetime time[];
-   ArraySetAsSeries(close, true);
-   ArraySetAsSeries(high, true);
-   ArraySetAsSeries(low, true);
-   ArraySetAsSeries(open, true);
-   ArraySetAsSeries(time, true);
 
    int copied = CopyClose(_Symbol, Inp_LTFTimeframe, 0, 100, close);
    CopyHigh(_Symbol, Inp_LTFTimeframe, 0, 100, high);
@@ -366,6 +361,13 @@ void OnTick()
 
    if(copied < 50)
       return;
+
+   // Correct MQL5 series array ordering AFTER Copy function calls
+   ArraySetAsSeries(close, true);
+   ArraySetAsSeries(high, true);
+   ArraySetAsSeries(low, true);
+   ArraySetAsSeries(open, true);
+   ArraySetAsSeries(time, true);
 
    // Evaluate Multi-Timeframe Setup Signal
    STradeSignal signal = g_strategyManager.EvaluateMarket(_Symbol, Inp_HTFTimeframe, Inp_LTFTimeframe, close, high, low, open, time, copied, Inp_MaxSpreadPoints, MIN_SETUP_SCORE_THRESHOLD);

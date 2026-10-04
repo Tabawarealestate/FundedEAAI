@@ -25,7 +25,7 @@ public:
 
    void              Init(string prefix = "FundedAI_Dash_");
    void              Destroy(void);
-   void              Update(const SChallengeAccountStatus &status, ENUM_EA_STATUS eaStatus, ENUM_MARKET_REGIME regime, double setupScore, string statusReason, string newsStatus = "NEWS FILTER ACTIVE", string sessionStatus = "LONDON/NY SESSION", double portfolioRiskPct = 0.0);
+   void              Update(const SChallengeAccountStatus &status, ENUM_EA_STATUS eaStatus, ENUM_MARKET_REGIME regime, double setupScore, string statusReason, string newsStatus = "NEWS DATA UNAVAILABLE", string sessionStatus = "LONDON/NY SESSION", double portfolioRiskPct = 0.0, string dataStatus = "DATA OK");
 
 private:
    void              CreateLabel(string name, string text, int x, int y, color clr, int fontSize = 9);
@@ -66,7 +66,7 @@ void CDashboardPanel::Destroy(void)
 //+------------------------------------------------------------------+
 //| Renders/Updates On-Chart Dashboard Panel                         |
 //+------------------------------------------------------------------+
-void CDashboardPanel::Update(const SChallengeAccountStatus &status, ENUM_EA_STATUS eaStatus, ENUM_MARKET_REGIME regime, double setupScore, string statusReason, string newsStatus, string sessionStatus, double portfolioRiskPct)
+void CDashboardPanel::Update(const SChallengeAccountStatus &status, ENUM_EA_STATUS eaStatus, ENUM_MARKET_REGIME regime, double setupScore, string statusReason, string newsStatus, string sessionStatus, double portfolioRiskPct, string dataStatus)
   {
    int x = 20;
    int y = 30;
@@ -90,7 +90,7 @@ void CDashboardPanel::Update(const SChallengeAccountStatus &status, ENUM_EA_STAT
    CreateLabel(m_prefix + "NewsSession", StringFormat("News: %s | Session: %s", newsStatus, sessionStatus), x, y, clrSkyBlue, 9);
    y += 18;
 
-   CreateLabel(m_prefix + "Regime", StringFormat("Regime: %s | Multi-Factor Score: %.0f/100 | Data Status: OK", EnumToString(regime), setupScore), x, y, clrYellow, 9);
+   CreateLabel(m_prefix + "Regime", StringFormat("Regime: %s | Multi-Factor Score: %.0f/100 | Data Status: %s", EnumToString(regime), setupScore, dataStatus), x, y, clrYellow, 9);
 
    ChartRedraw(0);
   }

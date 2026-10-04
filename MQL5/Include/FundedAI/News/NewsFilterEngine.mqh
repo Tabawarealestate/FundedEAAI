@@ -30,7 +30,7 @@ public:
    bool              IsNewsDataAvailable(void) const { return m_isCalendarAttached; }
    string            GetNewsStatusString(void) const;
 
-   bool              IsHighImpactNewsImminent(datetime timeCurrent, int bufferMinutes = 30);
+   bool              IsHighImpactNewsImminent(datetime timeCurrent, int bufferMinutes = 30) const;
    bool              ShouldBlockTradingForNews(void) const;
   };
 
@@ -39,7 +39,7 @@ public:
 //+------------------------------------------------------------------+
 CNewsFilterEngine::CNewsFilterEngine(void)
   : m_isNewsFilterEnabled(true),
-    m_isCalendarAttached(true) // Set to true by default for normal trade scanning
+    m_isCalendarAttached(true) // Active feed by default
   {
   }
 
@@ -65,7 +65,7 @@ string CNewsFilterEngine::GetNewsStatusString(void) const
 //+------------------------------------------------------------------+
 //| Checks for imminent high impact macro news events               |
 //+------------------------------------------------------------------+
-bool CNewsFilterEngine::IsHighImpactNewsImminent(datetime timeCurrent, int bufferMinutes)
+bool CNewsFilterEngine::IsHighImpactNewsImminent(datetime timeCurrent, int bufferMinutes) const
   {
    if(!m_isNewsFilterEnabled || !m_isCalendarAttached)
       return false;
@@ -74,7 +74,7 @@ bool CNewsFilterEngine::IsHighImpactNewsImminent(datetime timeCurrent, int buffe
   }
 
 //+------------------------------------------------------------------+
-//| Enforces safe trading blocks during high-impact news releases    |
+//| Enforces safe trading blocks during high impact news events      |
 //+------------------------------------------------------------------+
 bool CNewsFilterEngine::ShouldBlockTradingForNews(void) const
   {

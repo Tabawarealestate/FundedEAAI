@@ -36,7 +36,39 @@ enum ENUM_DAILY_LOSS_MODE
 enum ENUM_DRAWDOWN_MODEL
   {
    DRAWDOWN_STATIC   = 1, // Static Max Loss relative to Initial Starting Balance
-   DRAWDOWN_TRAILING = 2  // Trailing Max Loss relative to Peak Equity High-Water Mark
+   DRAWDOWN_TRAILING = 2  // Trailing Max Loss relative to Peak High-Water Mark
+  };
+
+//+------------------------------------------------------------------+
+//| Enumeration: High-Water Mark Source                              |
+//+------------------------------------------------------------------+
+enum ENUM_HWM_SOURCE
+  {
+   HWM_SOURCE_BALANCE = 1, // High-Water Mark tracked from Peak Balance
+   HWM_SOURCE_EQUITY  = 2  // High-Water Mark tracked from Peak Equity
+  };
+
+//+------------------------------------------------------------------+
+//| Enumeration: Execution Error Classification                      |
+//+------------------------------------------------------------------+
+enum ENUM_EXECUTION_ERROR_TYPE
+  {
+   ERROR_TYPE_NONE                 = 0,
+   ERROR_TYPE_RETRYABLE            = 1, // Requote, timeout, price changed
+   ERROR_TYPE_NON_RETRYABLE        = 2, // Invalid stops, market closed, no money
+   ERROR_TYPE_REQUIRES_USER_ACTION = 3  // Trading disabled, invalid volume/symbol
+  };
+
+//+------------------------------------------------------------------+
+//| Enumeration: Exposure Group Categories                           |
+//+------------------------------------------------------------------+
+enum ENUM_EXPOSURE_GROUP
+  {
+   EXPOSURE_FOREX_CURRENCY = 1, // Standard Forex currency pair exposure
+   EXPOSURE_GOLD_RISK      = 2, // Gold / Precious Metals exposure
+   EXPOSURE_US_EQUITY_RISK = 3, // US Indices (US30, NAS100, SPX500)
+   EXPOSURE_CRYPTO_RISK    = 4, // Cryptocurrency pairs
+   EXPOSURE_NOT_APPLICABLE = 5  // Other / Unclassified CFDs
   };
 
 //+------------------------------------------------------------------+
@@ -98,6 +130,8 @@ struct SChallengeProfileConfig
    ENUM_CHALLENGE_PHASE  phase;                       // Phase 1, Phase 2, Funded, Custom
    ENUM_DAILY_LOSS_MODE  dailyLossMode;               // Mode A (Equity), Mode B (Balance), Mode C
    ENUM_DRAWDOWN_MODEL   drawdownModel;               // Static vs Trailing High-Water Mark
+   ENUM_HWM_SOURCE       hwmSource;                   // Peak Balance vs Peak Equity
+   bool                  unrealizedMovesHWM;          // True if floating profit moves HWM
    double                profitTargetPercent;         // Target Profit (e.g. 10.0%)
    double                maxDailyLossPercent;         // Daily Loss Limit (e.g. 5.0%)
    double                maxOverallLossPercent;       // Overall Drawdown Limit (e.g. 10.0%)
@@ -112,7 +146,7 @@ struct SChallengeProfileConfig
    int                   gmtOffsetHours;              // Broker GMT Offset in Hours
    string                customRulesDescription;      // Extra rule notes
 
-   //--- Safety Buffers (Internal Risk Control Thresholds)
+   //--- Safety Buffers
    double                dailyLossWarningPercent;     // Threshold to trigger Defensive Mode (e.g. 3.0%)
    double                dailyLossSoftStopPercent;    // Threshold to halt new entries (e.g. 4.0%)
    double                dailyLossEmergencyPercent;   // Threshold to close all trades & halt (e.g. 4.5%)
@@ -128,7 +162,7 @@ struct SChallengeAccountStatus
    double                startingBalance;             // Initial Challenge Balance
    double                currentBalance;              // Current Account Balance
    double                currentEquity;               // Current Account Equity
-   double                highWaterMark;               // Peak Equity High-Water Mark for Trailing DD
+   double                highWaterMark;               // Peak High-Water Mark for Trailing DD
    double                dailyStartingEquity;         // Equity at start of broker trading day
    double                dailyStartingBalance;        // Balance at start of broker trading day
    double                dailyPL;                     // Today's Realized + Floating P/L
