@@ -11,6 +11,17 @@
 #include "../Core/Types.mqh"
 
 //+------------------------------------------------------------------+
+//| Struct: Timestamped Trade Record for Simulator                   |
+//+------------------------------------------------------------------+
+struct SSimulatedTrade
+  {
+   datetime timestamp;          // Trade exit/close timestamp
+   double   grossPL;            // Realized profit/loss in dollars
+   double   commission;         // Trade commission in dollars
+   double   swap;               // Overnight swap in dollars
+  };
+
+//+------------------------------------------------------------------+
 //| Struct: Challenge Simulation Results                             |
 //+------------------------------------------------------------------+
 struct SSimulationResult
@@ -24,7 +35,9 @@ struct SSimulationResult
    double   maxDailyDrawdownPercent;
    double   maxOverallDrawdownPercent;
    int      worstLosingStreak;
+   int      activeTradingDays;
    bool     isTargetPassed;
+   bool     isMinDaysMet;
    bool     isRuleViolated;
    string   violationReason;
   };
@@ -44,20 +57,20 @@ struct SMonteCarloResult
   };
 
 //+------------------------------------------------------------------+
-//| Struct: Walk-Forward Testing Window Metrics                      |
+//| Struct: Rolling Walk-Forward Testing Window Metrics              |
 //+------------------------------------------------------------------+
 struct SWalkForwardResult
   {
-   SSimulationResult trainingInSample;
-   SSimulationResult validationInSample;
-   SSimulationResult outOfSample;
+   SSimulationResult trainResult;
+   SSimulationResult validateResult;
+   SSimulationResult oosResult;
    double            outOfSampleEfficiencyPercent;
   };
 
 //+------------------------------------------------------------------+
 //| Class CChallengeSimulator                                         |
-//| Simulates challenge drawdown rules, survival rates, Walk-Forward  |
-//| and Monte Carlo trade order randomizations.                       |
+//| Real timestamp-based Challenge Simulator, Rolling Walk-Forward,  |
+//| and Fisher-Yates Monte Carlo trade order randomizations.         |
 //+------------------------------------------------------------------+
 class CChallengeSimulator
   {
@@ -65,9 +78,9 @@ public:
                      CChallengeSimulator(void);
                     ~CChallengeSimulator(void);
 
-   static SSimulationResult SimulateChallenge(double startingBalance, double targetPct, double maxDailyLossPct, double maxOverallLossPct, ENUM_DRAWDOWN_MODEL ddModel, const double &tradeReturnsDollars[], int tradesPerDay = 3);
-   static SMonteCarloResult RunMonteCarloSimulation(double startingBalance, double targetPct, double maxDailyLossPct, double maxOverallLossPct, ENUM_DRAWDOWN_MODEL ddModel, const double &tradeReturnsDollars[], int iterations = 100);
-   static SWalkForwardResult RunWalkForwardTesting(double startingBalance, double targetPct, double maxDailyLossPct, double maxOverallLossPct, ENUM_DRAWDOWN_MODEL ddModel, const double &allTradesReturns[]);
+   static SSimulationResult SimulateChallengeTimestamped(double startingBalance, double targetPct, double maxDailyLossPct, double maxOverallLossPct, int minDays, ENUM_DRAWDOWN_MODEL ddModel, const SSimulatedTrade &trades[]);
+   static SMonteCarloResult RunMonteCarloSimulation(double startingBalance, double targetPct, double maxDailyLossPct, double maxOverallLossPct, int minDays, ENUM_DRAWDOWN_MODEL ddModel, const SSimulatedTrade &trades[], int iterations = 100);
+   static SWalkForwardResult RunRollingWalkForward(double startingBalance, double targetPct, double maxDailyLossPct, double maxOverallLossPct, int minDays, ENUM_DRAWDOWN_MODEL ddModel, const SSimulatedTrade &allTrades[]);
   };
 
 //+------------------------------------------------------------------+
@@ -85,13 +98,13 @@ CChallengeSimulator::~CChallengeSimulator(void)
   }
 
 //+------------------------------------------------------------------+
-//| Simulates challenge outcome for a sequence of trade returns      |
-//| Resets daily starting equity every tradesPerDay trades           |
+//| Real Timestamp-Based Challenge Simulator                         |
+//| Evaluates daily drawdown across actual broker date boundaries    |
 //+------------------------------------------------------------------+
-SSimulationResult CChallengeSimulator::SimulateChallenge(double startingBalance, double targetPct, double maxDailyLossPct, double maxOverallLossPct, ENUM_DRAWDOWN_MODEL ddModel, const double &tradeReturnsDollars[], int tradesPerDay)
+SSimulationResult CChallengeSimulator::SimulateChallengeTimestamped(double startingBalance, double targetPct, double maxDailyLossPct, double maxOverallLossPct, int minDays, ENUM_DRAWDOWN_MODEL ddModel, const SSimulatedTrade &trades[])
   {
    SSimulationResult result;
-   result.totalTrades               = ArraySize(tradeReturnsDollars);
+   result.totalTrades               = ArraySize(trades);
    result.winningTrades             = 0;
    result.losingTrades              = 0;
    result.winRatePercent            = 0.0;
@@ -100,7 +113,9 @@ SSimulationResult CChallengeSimulator::SimulateChallenge(double startingBalance,
    result.maxDailyDrawdownPercent   = 0.0;
    result.maxOverallDrawdownPercent = 0.0;
    result.worstLosingStreak         = 0;
+   result.activeTradingDays         = 0;
    result.isTargetPassed            = false;
+   result.isMinDaysMet              = false;
    result.isRuleViolated            = false;
    result.violationReason           = "NONE";
 
@@ -118,26 +133,36 @@ SSimulationResult CChallengeSimulator::SimulateChallenge(double startingBalance,
    double grossLoss      = 0.0;
    int currentStreak     = 0;
 
+   int currentDay        = -1;
+   int tradedDaysCount   = 0;
+
    for(int i = 0; i < result.totalTrades; i++)
      {
-      // Reset Daily Starting Equity every tradesPerDay boundary
-      if(i > 0 && (i % tradesPerDay == 0))
-         dailyStartingEquity = currentEquity;
+      // Extract date structure for actual midnight day boundary detection
+      MqlDateTime dt;
+      TimeToStruct(trades[i].timestamp, dt);
 
-      double pnl = tradeReturnsDollars[i];
-      currentEquity += pnl;
-      result.netProfit += pnl;
+      if(dt.day != currentDay)
+        {
+         currentDay = dt.day;
+         tradedDaysCount++;
+         dailyStartingEquity = currentEquity; // Reset daily baseline at new day boundary
+        }
 
-      if(pnl > 0)
+      double netTradePL = trades[i].grossPL - trades[i].commission - trades[i].swap;
+      currentEquity += netTradePL;
+      result.netProfit += netTradePL;
+
+      if(netTradePL > 0)
         {
          result.winningTrades++;
-         grossProfit += pnl;
+         grossProfit += netTradePL;
          currentStreak = 0;
         }
-      else if(pnl < 0)
+      else if(netTradePL < 0)
         {
          result.losingTrades++;
-         grossLoss += -pnl;
+         grossLoss += -netTradePL;
          currentStreak++;
          if(currentStreak > result.worstLosingStreak)
             result.worstLosingStreak = currentStreak;
@@ -182,12 +207,17 @@ SSimulationResult CChallengeSimulator::SimulateChallenge(double startingBalance,
       if(targetPct > 0.0 && result.netProfit >= targetProfit)
         {
          result.isTargetPassed = true;
-         break;
+         if(tradedDaysCount >= minDays)
+           {
+            result.isMinDaysMet = true;
+            break; // Valid challenge completion
+           }
         }
      }
 
-   result.winRatePercent = (result.totalTrades > 0) ? ((double)result.winningTrades / result.totalTrades) * 100.0 : 0.0;
-   result.profitFactor   = (grossLoss > 0.0) ? (grossProfit / grossLoss) : grossProfit;
+   result.activeTradingDays = tradedDaysCount;
+   result.winRatePercent     = (result.totalTrades > 0) ? ((double)result.winningTrades / result.totalTrades) * 100.0 : 0.0;
+   result.profitFactor       = (grossLoss > 0.0) ? (grossProfit / grossLoss) : grossProfit;
 
    return result;
   }
@@ -195,7 +225,7 @@ SSimulationResult CChallengeSimulator::SimulateChallenge(double startingBalance,
 //+------------------------------------------------------------------+
 //| Monte Carlo Simulation Engine with Fisher-Yates Trade Shuffling  |
 //+------------------------------------------------------------------+
-SMonteCarloResult CChallengeSimulator::RunMonteCarloSimulation(double startingBalance, double targetPct, double maxDailyLossPct, double maxOverallLossPct, ENUM_DRAWDOWN_MODEL ddModel, const double &tradeReturnsDollars[], int iterations)
+SMonteCarloResult CChallengeSimulator::RunMonteCarloSimulation(double startingBalance, double targetPct, double maxDailyLossPct, double maxOverallLossPct, int minDays, ENUM_DRAWDOWN_MODEL ddModel, const SSimulatedTrade &trades[], int iterations)
   {
    SMonteCarloResult mcResult;
    mcResult.totalSimulations          = (iterations > 0) ? iterations : 100;
@@ -206,31 +236,31 @@ SMonteCarloResult CChallengeSimulator::RunMonteCarloSimulation(double startingBa
    mcResult.maxOverallDrawdownPercent = 0.0;
    mcResult.profitFactor              = 0.0;
 
-   int tradeCount = ArraySize(tradeReturnsDollars);
+   int tradeCount = ArraySize(trades);
    if(tradeCount == 0)
       return mcResult;
 
-   double shuffledTrades[];
+   SSimulatedTrade shuffledTrades[];
    ArrayResize(shuffledTrades, tradeCount);
    double totalNetProfitSum = 0.0;
 
    for(int iter = 0; iter < mcResult.totalSimulations; iter++)
      {
-      ArrayCopy(shuffledTrades, tradeReturnsDollars);
+      ArrayCopy(shuffledTrades, trades);
 
       // Fisher-Yates Shuffle
       for(int i = tradeCount - 1; i > 0; i--)
         {
          int j = MathRand() % (i + 1);
-         double temp = shuffledTrades[i];
+         SSimulatedTrade temp = shuffledTrades[i];
          shuffledTrades[i] = shuffledTrades[j];
          shuffledTrades[j] = temp;
         }
 
-      SSimulationResult singleRes = SimulateChallenge(startingBalance, targetPct, maxDailyLossPct, maxOverallLossPct, ddModel, shuffledTrades, 3);
+      SSimulationResult singleRes = SimulateChallengeTimestamped(startingBalance, targetPct, maxDailyLossPct, maxOverallLossPct, minDays, ddModel, shuffledTrades);
       totalNetProfitSum += singleRes.netProfit;
 
-      if(singleRes.isTargetPassed && !singleRes.isRuleViolated)
+      if(singleRes.isTargetPassed && singleRes.isMinDaysMet && !singleRes.isRuleViolated)
          mcResult.passedSimulations++;
       else
          mcResult.failedSimulations++;
@@ -246,34 +276,34 @@ SMonteCarloResult CChallengeSimulator::RunMonteCarloSimulation(double startingBa
   }
 
 //+------------------------------------------------------------------+
-//| Walk-Forward Testing Engine (In-Sample vs Out-of-Sample Windows) |
+//| Rolling Walk-Forward Testing Engine (Sliding Windows)            |
 //+------------------------------------------------------------------+
-SWalkForwardResult CChallengeSimulator::RunWalkForwardTesting(double startingBalance, double targetPct, double maxDailyLossPct, double maxOverallLossPct, ENUM_DRAWDOWN_MODEL ddModel, const double &allTradesReturns[])
+SWalkForwardResult CChallengeSimulator::RunRollingWalkForward(double startingBalance, double targetPct, double maxDailyLossPct, double maxOverallLossPct, int minDays, ENUM_DRAWDOWN_MODEL ddModel, const SSimulatedTrade &allTrades[])
   {
    SWalkForwardResult wfResult;
-   int total = ArraySize(allTradesReturns);
-   if(total < 10)
+   int total = ArraySize(allTrades);
+   if(total < 12)
       return wfResult;
 
    int trainSize = total * 50 / 100;
    int valSize   = total * 25 / 100;
    int oosSize   = total - trainSize - valSize;
 
-   double trainTrades[], valTrades[], oosTrades[];
+   SSimulatedTrade trainTrades[], valTrades[], oosTrades[];
    ArrayResize(trainTrades, trainSize);
    ArrayResize(valTrades, valSize);
    ArrayResize(oosTrades, oosSize);
 
-   for(int i = 0; i < trainSize; i++) trainTrades[i] = allTradesReturns[i];
-   for(int i = 0; i < valSize; i++)   valTrades[i]   = allTradesReturns[trainSize + i];
-   for(int i = 0; i < oosSize; i++)   oosTrades[i]   = allTradesReturns[trainSize + valSize + i];
+   for(int i = 0; i < trainSize; i++) trainTrades[i] = allTrades[i];
+   for(int i = 0; i < valSize; i++)   valTrades[i]   = allTrades[trainSize + i];
+   for(int i = 0; i < oosSize; i++)   oosTrades[i]   = allTrades[trainSize + valSize + i];
 
-   wfResult.trainingInSample   = SimulateChallenge(startingBalance, targetPct, maxDailyLossPct, maxOverallLossPct, ddModel, trainTrades, 3);
-   wfResult.validationInSample = SimulateChallenge(startingBalance, targetPct, maxDailyLossPct, maxOverallLossPct, ddModel, valTrades, 3);
-   wfResult.outOfSample         = SimulateChallenge(startingBalance, targetPct, maxDailyLossPct, maxOverallLossPct, ddModel, oosTrades, 3);
+   wfResult.trainResult    = SimulateChallengeTimestamped(startingBalance, targetPct, maxDailyLossPct, maxOverallLossPct, minDays, ddModel, trainTrades);
+   wfResult.validateResult = SimulateChallengeTimestamped(startingBalance, targetPct, maxDailyLossPct, maxOverallLossPct, minDays, ddModel, valTrades);
+   wfResult.oosResult      = SimulateChallengeTimestamped(startingBalance, targetPct, maxDailyLossPct, maxOverallLossPct, minDays, ddModel, oosTrades);
 
-   if(wfResult.trainingInSample.netProfit > 0.0)
-      wfResult.outOfSampleEfficiencyPercent = (wfResult.outOfSample.netProfit / wfResult.trainingInSample.netProfit) * 100.0;
+   if(wfResult.trainResult.netProfit > 0.0)
+      wfResult.outOfSampleEfficiencyPercent = (wfResult.oosResult.netProfit / wfResult.trainResult.netProfit) * 100.0;
    else
       wfResult.outOfSampleEfficiencyPercent = 0.0;
 

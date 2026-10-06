@@ -19,6 +19,7 @@ struct SExecutionResult
   {
    bool     isSuccess;          // True if order placed/closed successfully
    ulong    ticket;             // Position / Order Ticket Number
+   ulong    dealTicket;         // Reconciled History Deal Ticket Number
    double   executedPrice;      // Filled Execution Price
    double   executedLot;        // Filled Lot Size
    uint     retcode;            // MT5 Trade Server Return Code
@@ -28,7 +29,7 @@ struct SExecutionResult
 //+------------------------------------------------------------------+
 //| Class CExecutionEngine                                           |
 //| Native MQL5 Order Execution Engine handling trade sending,      |
-//| slippage/spread safeguards, failover retries, and error logs.    |
+//| deal history reconciliation, netting/hedging support, retries.   |
 //+------------------------------------------------------------------+
 class CExecutionEngine
   {
@@ -48,6 +49,9 @@ public:
    SExecutionResult  OpenMarketOrder(string symbol, ENUM_ORDER_TYPE orderType, double lotSize, double stopLoss, double takeProfit, string comment = "");
    bool              ClosePositionByTicket(ulong ticket);
    bool              CloseAllPositions(string symbol = "");
+
+   //--- Reconciliation
+   bool              ReconcileOrderDeal(ulong orderTicket, ulong &dealTicket, double &actualPrice, double &actualVolume);
 
    //--- Error Handler
    static string     GetRetcodeDescription(uint retcode);
@@ -102,6 +106,36 @@ ENUM_ORDER_TYPE_FILLING CExecutionEngine::GetOptimalFillingType(string symbol)
   }
 
 //+------------------------------------------------------------------+
+//| Reconciles order execution with actual deal history records      |
+//+------------------------------------------------------------------+
+bool CExecutionEngine::ReconcileOrderDeal(ulong orderTicket, ulong &dealTicket, double &actualPrice, double &actualVolume)
+  {
+   dealTicket  = 0;
+   actualPrice = 0.0;
+   actualVolume= 0.0;
+
+   if(!HistorySelect(TimeCurrent() - 60, TimeCurrent() + 5))
+      return false;
+
+   int totalDeals = HistoryDealsTotal();
+   for(int i = totalDeals - 1; i >= 0; i--)
+     {
+      ulong ticket = HistoryDealGetTicket(i);
+      if(ticket > 0)
+        {
+         if(HistoryDealGetInteger(ticket, DEAL_ORDER) == (long)orderTicket)
+           {
+            dealTicket   = ticket;
+            actualPrice  = HistoryDealGetDouble(ticket, DEAL_PRICE);
+            actualVolume = HistoryDealGetDouble(ticket, DEAL_VOLUME);
+            return true;
+           }
+        }
+     }
+   return false;
+  }
+
+//+------------------------------------------------------------------+
 //| Checks whether trade server error is retryable                   |
 //+------------------------------------------------------------------+
 bool CExecutionEngine::IsRetryableError(uint retcode)
@@ -123,6 +157,7 @@ SExecutionResult CExecutionEngine::OpenMarketOrder(string symbol, ENUM_ORDER_TYP
    SExecutionResult result;
    result.isSuccess     = false;
    result.ticket        = 0;
+   result.dealTicket    = 0;
    result.executedPrice = 0.0;
    result.executedLot   = 0.0;
    result.retcode       = 0;
@@ -165,13 +200,24 @@ SExecutionResult CExecutionEngine::OpenMarketOrder(string symbol, ENUM_ORDER_TYP
          result.ticket        = m_trade.ResultOrder();
          result.executedPrice = m_trade.ResultPrice();
          result.executedLot   = m_trade.ResultVolume();
+
+         // Post-transaction deal reconciliation
+         ulong dTicket = 0;
+         double recPrice = 0.0, recVol = 0.0;
+         if(ReconcileOrderDeal(result.ticket, dTicket, recPrice, recVol))
+           {
+            result.dealTicket    = dTicket;
+            result.executedPrice = recPrice;
+            result.executedLot   = recVol;
+           }
+
          result.errorMessage  = "ORDER EXECUTED SUCCESSFULLY";
          return result;
         }
 
       result.errorMessage = StringFormat("Attempt %d failed: %s (Code: %u)", attempt, GetRetcodeDescription(result.retcode), result.retcode);
 
-      // Do not retry non-retryable errors (e.g., insufficient funds, invalid stops)
+      // Do not retry non-retryable errors
       if(!IsRetryableError(result.retcode))
          break;
 

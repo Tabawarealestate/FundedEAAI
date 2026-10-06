@@ -36,6 +36,8 @@ input double                 Inp_AccountBalance      = 100000.0;                
 input ENUM_CHALLENGE_PHASE   Inp_ChallengePhase      = CHALLENGE_PHASE_1;          // Evaluation Phase
 input ENUM_DAILY_LOSS_MODE   Inp_DailyLossMode       = DAILY_LOSS_MODE_A_EQUITY;   // Daily Loss Calculation Mode
 input ENUM_DRAWDOWN_MODEL    Inp_DrawdownModel       = DRAWDOWN_STATIC;            // Drawdown Model (Static / Trailing)
+input ENUM_HWM_SOURCE       Inp_HWMSource           = HWM_SOURCE_EQUITY;          // High-Water Mark Source
+input bool                   Inp_UnrealizedMovesHWM  = true;                       // Floating Profit Moves HWM
 input double                 Inp_ProfitTarget        = 10.0;                       // Profit Target (%)
 input double                 Inp_MaxDailyLoss        = 5.0;                        // Max Daily Loss Limit (%)
 input double                 Inp_MaxOverallLoss      = 10.0;                       // Max Overall Drawdown (%)
@@ -84,6 +86,39 @@ int                 g_consecutiveLosses    = 0;
 int                 g_activeTradingDays    = 0;
 double              g_latestSetupScore     = 0.0;
 ENUM_MARKET_REGIME  g_latestRegime         = REGIME_RANGE;
+
+//+------------------------------------------------------------------+
+//| Input Validator Engine                                           |
+//+------------------------------------------------------------------+
+int ValidateInputs(void)
+  {
+   if(Inp_AccountBalance <= 0.0)
+     {
+      Print("FATAL ERROR: Account Balance must be > 0.0");
+      return INIT_PARAMETERS_INCORRECT;
+     }
+   if(Inp_MaxDailyLoss <= 0.0 || Inp_MaxDailyLoss >= 50.0)
+     {
+      Print("FATAL ERROR: Max Daily Loss % must be between 0.1% and 50.0%");
+      return INIT_PARAMETERS_INCORRECT;
+     }
+   if(Inp_MaxOverallLoss <= 0.0 || Inp_MaxOverallLoss <= Inp_MaxDailyLoss)
+     {
+      Print("FATAL ERROR: Max Overall Loss % must be greater than Max Daily Loss %");
+      return INIT_PARAMETERS_INCORRECT;
+     }
+   if(Inp_RiskPercent <= 0.0 || Inp_RiskPercent > Inp_MaxDailyLoss)
+     {
+      Print("FATAL ERROR: Risk per trade % cannot exceed Max Daily Loss %");
+      return INIT_PARAMETERS_INCORRECT;
+     }
+   if(Inp_MaxOpenPositions <= 0 || Inp_MaxOpenPositions > 20)
+     {
+      Print("FATAL ERROR: Max Open Positions must be between 1 and 20");
+      return INIT_PARAMETERS_INCORRECT;
+     }
+   return INIT_SUCCEEDED;
+  }
 
 //+------------------------------------------------------------------+
 //| Helper Function: Calculate Unique Traded Days From History        |
@@ -151,6 +186,11 @@ bool IsNewBar(void)
 //+------------------------------------------------------------------+
 int OnInit()
   {
+   // 0. Validate Configuration Inputs
+   int valRes = ValidateInputs();
+   if(valRes != INIT_SUCCEEDED)
+      return valRes;
+
    // 1. Initialize Challenge Profile
    SChallengeProfileConfig config;
    config.profileName               = "Configured Prop Profile";
@@ -158,6 +198,8 @@ int OnInit()
    config.phase                     = Inp_ChallengePhase;
    config.dailyLossMode             = Inp_DailyLossMode;
    config.drawdownModel             = Inp_DrawdownModel;
+   config.hwmSource                 = Inp_HWMSource;
+   config.unrealizedMovesHWM        = Inp_UnrealizedMovesHWM;
    config.profitTargetPercent     = Inp_ProfitTarget;
    config.maxDailyLossPercent       = Inp_MaxDailyLoss;
    config.maxOverallLossPercent     = Inp_MaxOverallLoss;
@@ -311,8 +353,8 @@ void OnTick()
    if(!g_guard.CanOpenNewTrade())
       return; // Block entry scanning if paused or stopped
 
-   // News Protection Rule: Block entries if news protection enabled but feed unattached
-   if(g_newsEngine.ShouldBlockTradingForNews())
+   // News Protection Rule: Block entries if news protection enabled but feed unattached for current symbol
+   if(g_newsEngine.ShouldBlockTradingForNews(_Symbol))
       return;
 
    // Overnight Rule Entry Block: Do not open new entries late at night if overnight trading disabled

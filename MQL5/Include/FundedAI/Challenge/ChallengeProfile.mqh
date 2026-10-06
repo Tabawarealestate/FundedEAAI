@@ -77,6 +77,8 @@ void CChallengeProfile::LoadDefaultPreset(double initialBalance, ENUM_CHALLENGE_
    m_config.phase                 = phase;
    m_config.dailyLossMode         = DAILY_LOSS_MODE_A_EQUITY;
    m_config.drawdownModel         = DRAWDOWN_STATIC;
+   m_config.hwmSource             = HWM_SOURCE_EQUITY;
+   m_config.unrealizedMovesHWM    = true;
 
    //--- Set Profit Target based on phase
    if(phase == CHALLENGE_PHASE_1)
@@ -150,9 +152,13 @@ void CChallengeProfile::UpdateAccountStatus(double currentBalance, double curren
    m_status.activeTradingDays     = activeTradingDays;
    m_status.isMinTradingDaysMet   = (activeTradingDays >= m_config.minTradingDays);
 
-   // Update Peak Equity High-Water Mark for Trailing Drawdown
-   if(currentEquity > m_status.highWaterMark)
-      m_status.highWaterMark = currentEquity;
+   // Update Peak High-Water Mark based on configured source (Equity vs Balance)
+   double hwmReference = (m_config.hwmSource == HWM_SOURCE_BALANCE) ? currentBalance : currentEquity;
+   if(!m_config.unrealizedMovesHWM)
+      hwmReference = currentBalance; // Pure balance HWM if unrealized profit excluded
+
+   if(hwmReference > m_status.highWaterMark)
+      m_status.highWaterMark = hwmReference;
 
    //--- Daily P/L Calculation according to Configured Daily Loss Mode
    if(m_config.dailyLossMode == DAILY_LOSS_MODE_A_EQUITY)

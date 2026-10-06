@@ -12,7 +12,8 @@
 
 //+------------------------------------------------------------------+
 //| Class CNewsFilterEngine                                          |
-//| Handles macro high-impact news safeguards and trading pauses.    |
+//| Native MT5 Economic Calendar API Engine handling high-impact     |
+//| macro news filtering, currency mapping, and fail-safe blocking. |
 //+------------------------------------------------------------------+
 class CNewsFilterEngine
   {
@@ -26,12 +27,14 @@ public:
 
    void              SetEnabled(bool enabled) { m_isNewsFilterEnabled = enabled; }
    bool              IsNewsFilterActive(void) const { return m_isNewsFilterEnabled; }
-
    bool              IsNewsDataAvailable(void) const { return m_isCalendarAttached; }
    string            GetNewsStatusString(void) const;
 
-   bool              IsHighImpactNewsImminent(datetime timeCurrent, int bufferMinutes = 30) const;
-   bool              ShouldBlockTradingForNews(void) const;
+   bool              IsHighImpactNewsImminent(string symbol, datetime timeCurrent, int bufferMinutes = 30);
+   bool              ShouldBlockTradingForNews(string symbol = "EURUSD");
+
+private:
+   void              GetSymbolCurrencies(string symbol, string &baseCurr, string &marginCurr);
   };
 
 //+------------------------------------------------------------------+
@@ -39,7 +42,7 @@ public:
 //+------------------------------------------------------------------+
 CNewsFilterEngine::CNewsFilterEngine(void)
   : m_isNewsFilterEnabled(true),
-    m_isCalendarAttached(true) // Active feed by default
+    m_isCalendarAttached(false)
   {
   }
 
@@ -51,35 +54,101 @@ CNewsFilterEngine::~CNewsFilterEngine(void)
   }
 
 //+------------------------------------------------------------------+
+//| Extracts currency exposure for a given symbol                    |
+//+------------------------------------------------------------------+
+void CNewsFilterEngine::GetSymbolCurrencies(string symbol, string &baseCurr, string &marginCurr)
+  {
+   baseCurr   = SymbolInfoString(symbol, SYMBOL_CURRENCY_BASE);
+   marginCurr = SymbolInfoString(symbol, SYMBOL_CURRENCY_MARGIN);
+
+   if(baseCurr == "")
+      baseCurr = StringSubstr(symbol, 0, 3);
+   if(marginCurr == "")
+      marginCurr = StringSubstr(symbol, 3, 3);
+  }
+
+//+------------------------------------------------------------------+
 //| Returns human-readable news status string                        |
 //+------------------------------------------------------------------+
 string CNewsFilterEngine::GetNewsStatusString(void) const
   {
    if(!m_isNewsFilterEnabled)
       return "NEWS FILTER DISABLED";
+   if(MqlInfoInteger(MQL_TESTER))
+      return "NEWS FILTER TESTER BYPASS";
    if(!m_isCalendarAttached)
-      return "NEWS DATA UNAVAILABLE";
+      return "NEWS DATA UNAVAILABLE - TRADES BLOCKED";
    return "NEWS FILTER ACTIVE";
   }
 
 //+------------------------------------------------------------------+
-//| Checks for imminent high impact macro news events               |
+//| Checks for imminent high-impact macro news using MT5 Calendar    |
 //+------------------------------------------------------------------+
-bool CNewsFilterEngine::IsHighImpactNewsImminent(datetime timeCurrent, int bufferMinutes) const
+bool CNewsFilterEngine::IsHighImpactNewsImminent(string symbol, datetime timeCurrent, int bufferMinutes)
   {
-   if(!m_isNewsFilterEnabled || !m_isCalendarAttached)
+   if(!m_isNewsFilterEnabled)
+     {
+      m_isCalendarAttached = true;
+      return false;
+     }
+
+   // Graceful Strategy Tester bypass (MT5 Calendar API is not supported in backtesting)
+   if(MqlInfoInteger(MQL_TESTER))
+     {
+      m_isCalendarAttached = true;
+      return false;
+     }
+
+   string baseCurr, marginCurr;
+   GetSymbolCurrencies(symbol, baseCurr, marginCurr);
+
+   datetime fromTime = timeCurrent - (bufferMinutes * 60);
+   datetime toTime   = timeCurrent + (bufferMinutes * 60);
+
+   MqlCalendarValue values[];
+   // Fetch calendar events using native MT5 CalendarValueHistory API
+   int totalValues = CalendarValueHistory(values, fromTime, toTime, NULL, NULL);
+
+   if(totalValues < 0)
+     {
+      // Calendar API unattached or unsupported by broker server -> FAIL SAFE CLOSED
+      m_isCalendarAttached = false;
+      return true; // Block trading safely when news feed is unavailable
+     }
+
+   m_isCalendarAttached = true;
+   if(totalValues == 0)
       return false;
 
+   for(int i = 0; i < totalValues; i++)
+     {
+      MqlCalendarEvent event;
+      if(CalendarEventById(values[i].event_id, event))
+        {
+         // Filter for High Impact Events (Importance == CALENDAR_IMPORTANCE_HIGH)
+         if(event.importance == CALENDAR_IMPORTANCE_HIGH)
+           {
+            MqlCalendarCountry country;
+            if(CalendarCountryById(event.country_id, country))
+              {
+               if(country.currency == baseCurr || country.currency == marginCurr || country.currency == "USD")
+                 {
+                  return true; // High impact news event detected within buffer window
+                 }
+              }
+           }
+        }
+     }
    return false;
   }
 
 //+------------------------------------------------------------------+
-//| Enforces safe trading blocks during high impact news events      |
+//| Enforces safe trading blocks during high-impact news events      |
 //+------------------------------------------------------------------+
-bool CNewsFilterEngine::ShouldBlockTradingForNews(void) const
+bool CNewsFilterEngine::ShouldBlockTradingForNews(string symbol)
   {
-   if(!m_isNewsFilterEnabled || !m_isCalendarAttached)
+   if(!m_isNewsFilterEnabled)
       return false;
 
-   return IsHighImpactNewsImminent(TimeCurrent(), 30);
+   return IsHighImpactNewsImminent(symbol, TimeCurrent(), 30);
   }

@@ -23,7 +23,7 @@ enum ENUM_TRADING_SESSION
 
 //+------------------------------------------------------------------+
 //| Class CSessionEngine                                             |
-//| Analyzes market sessions, trading hours, and GMT time filters.   |
+//| Analyzes market sessions, trading hours, and GMT/DST filters.    |
 //+------------------------------------------------------------------+
 class CSessionEngine
   {
@@ -31,8 +31,9 @@ public:
                      CSessionEngine(void);
                     ~CSessionEngine(void);
 
-   static ENUM_TRADING_SESSION GetCurrentSession(datetime timeCurrent, int gmtOffsetHours = 2);
-   static bool                 IsOptimalTradingSession(datetime timeCurrent, int gmtOffsetHours = 2);
+   static datetime             GetBrokerGMTTime(datetime timeCurrent, int gmtOffsetHours, bool autoDst = true);
+   static ENUM_TRADING_SESSION GetCurrentSession(datetime timeCurrent, int gmtOffsetHours = 2, bool autoDst = true);
+   static bool                 IsOptimalTradingSession(datetime timeCurrent, int gmtOffsetHours = 2, bool autoDst = true);
    static bool                 IsWeekend(datetime timeCurrent);
   };
 
@@ -51,11 +52,28 @@ CSessionEngine::~CSessionEngine(void)
   }
 
 //+------------------------------------------------------------------+
-//| Returns current active trading session adjusted for GMT Offset   |
+//| Calculates GMT time with Daylight Saving Time (DST) adjustment   |
 //+------------------------------------------------------------------+
-ENUM_TRADING_SESSION CSessionEngine::GetCurrentSession(datetime timeCurrent, int gmtOffsetHours)
+datetime CSessionEngine::GetBrokerGMTTime(datetime timeCurrent, int gmtOffsetHours, bool autoDst)
   {
-   datetime gmtTime = timeCurrent - (gmtOffsetHours * 3600);
+   int totalOffsetHours = gmtOffsetHours;
+   if(autoDst)
+     {
+      MqlDateTime dt;
+      TimeToStruct(timeCurrent, dt);
+      // US/Europe DST approximate range: March (month 3) to November (month 11)
+      if(dt.mon >= 3 && dt.mon <= 10)
+         totalOffsetHours += 1;
+     }
+   return timeCurrent - (totalOffsetHours * 3600);
+  }
+
+//+------------------------------------------------------------------+
+//| Returns current active trading session adjusted for GMT/DST      |
+//+------------------------------------------------------------------+
+ENUM_TRADING_SESSION CSessionEngine::GetCurrentSession(datetime timeCurrent, int gmtOffsetHours, bool autoDst)
+  {
+   datetime gmtTime = GetBrokerGMTTime(timeCurrent, gmtOffsetHours, autoDst);
    MqlDateTime dt;
    TimeToStruct(gmtTime, dt);
 
@@ -72,9 +90,9 @@ ENUM_TRADING_SESSION CSessionEngine::GetCurrentSession(datetime timeCurrent, int
 //+------------------------------------------------------------------+
 //| Evaluates if current hour falls within London or NY sessions     |
 //+------------------------------------------------------------------+
-bool CSessionEngine::IsOptimalTradingSession(datetime timeCurrent, int gmtOffsetHours)
+bool CSessionEngine::IsOptimalTradingSession(datetime timeCurrent, int gmtOffsetHours, bool autoDst)
   {
-   datetime gmtTime = timeCurrent - (gmtOffsetHours * 3600);
+   datetime gmtTime = GetBrokerGMTTime(timeCurrent, gmtOffsetHours, autoDst);
    MqlDateTime dt;
    TimeToStruct(gmtTime, dt);
 

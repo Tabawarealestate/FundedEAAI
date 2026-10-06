@@ -29,6 +29,8 @@ struct SSymbolSpecification
    int      currentSpreadPoints;// Current spread in points
    bool     isTradeAllowed;     // True if trading permitted on symbol
    bool     isDataFresh;        // True if tick data is fresh
+   bool     isHedgingAccount;   // True if account mode is hedging, false if netting
+   uint     executionFillingMode; // Detected filling mode (FOK, IOC, RETURN)
   };
 
 //+------------------------------------------------------------------+
@@ -41,9 +43,10 @@ public:
                      CSymbolUtils(void);
                     ~CSymbolUtils(void);
 
-   //--- Spec Detection
+   //--- Spec Detection & Discovery
    static bool       GetSymbolSpec(string symbol, SSymbolSpecification &spec, int maxStaleSeconds = 10);
    static bool       ValidateMarketData(string symbol, int maxAllowedSpreadPoints, int maxStaleSeconds = 10);
+   static string     DiscoverBrokerSymbol(string baseSymbol);
   };
 
 //+------------------------------------------------------------------+
@@ -61,34 +64,72 @@ CSymbolUtils::~CSymbolUtils(void)
   }
 
 //+------------------------------------------------------------------+
+//| Auto-discovers broker specific symbol variants (prefixes/suffixes)|
+//+------------------------------------------------------------------+
+string CSymbolUtils::DiscoverBrokerSymbol(string baseSymbol)
+  {
+   // 1. Direct check
+   if(SymbolInfoInteger(baseSymbol, SYMBOL_SELECT))
+      return baseSymbol;
+
+   // 2. Scan active symbols in market watch
+   int totalSymbols = SymbolsTotal(false);
+   for(int i = 0; i < totalSymbols; i++)
+     {
+      string currSymbol = SymbolName(i, false);
+      if(StringFind(currSymbol, baseSymbol) >= 0)
+        {
+         SymbolSelect(currSymbol, true);
+         return currSymbol;
+        }
+     }
+   return baseSymbol;
+  }
+
+//+------------------------------------------------------------------+
 //| Detects broker specifications for any given symbol               |
 //+------------------------------------------------------------------+
 bool CSymbolUtils::GetSymbolSpec(string symbol, SSymbolSpecification &spec, int maxStaleSeconds)
   {
-   if(!SymbolInfoInteger(symbol, SYMBOL_SELECT))
-      SymbolSelect(symbol, true);
+   string actualSymbol = DiscoverBrokerSymbol(symbol);
 
-   spec.symbolName          = symbol;
-   spec.digits              = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
-   spec.pointSize           = SymbolInfoDouble(symbol, SYMBOL_POINT);
-   spec.tickSize            = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
-   spec.tickValue           = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
-   spec.contractSize        = SymbolInfoDouble(symbol, SYMBOL_TRADE_CONTRACT_SIZE);
-   spec.minLot              = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
-   spec.maxLot              = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
-   spec.lotStep             = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
-   spec.stopLevel           = (int)SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL);
-   spec.freezeLevel         = (int)SymbolInfoInteger(symbol, SYMBOL_TRADE_FREEZE_LEVEL);
+   if(!SymbolInfoInteger(actualSymbol, SYMBOL_SELECT))
+      SymbolSelect(actualSymbol, true);
+
+   spec.symbolName          = actualSymbol;
+   spec.digits              = (int)SymbolInfoInteger(actualSymbol, SYMBOL_DIGITS);
+   spec.pointSize           = SymbolInfoDouble(actualSymbol, SYMBOL_POINT);
+   spec.tickSize            = SymbolInfoDouble(actualSymbol, SYMBOL_TRADE_TICK_SIZE);
+   spec.tickValue           = SymbolInfoDouble(actualSymbol, SYMBOL_TRADE_TICK_VALUE);
+   spec.contractSize        = SymbolInfoDouble(actualSymbol, SYMBOL_TRADE_CONTRACT_SIZE);
+   spec.minLot              = SymbolInfoDouble(actualSymbol, SYMBOL_VOLUME_MIN);
+   spec.maxLot              = SymbolInfoDouble(actualSymbol, SYMBOL_VOLUME_MAX);
+   spec.lotStep             = SymbolInfoDouble(actualSymbol, SYMBOL_VOLUME_STEP);
+   spec.stopLevel           = (int)SymbolInfoInteger(actualSymbol, SYMBOL_TRADE_STOPS_LEVEL);
+   spec.freezeLevel         = (int)SymbolInfoInteger(actualSymbol, SYMBOL_TRADE_FREEZE_LEVEL);
+
+   // Account Mode Detection (Hedging vs Netting)
+   ENUM_ACCOUNT_MARGIN_MODE marginMode = (ENUM_ACCOUNT_MARGIN_MODE)AccountInfoInteger(ACCOUNT_MARGIN_MODE);
+   spec.isHedgingAccount    = (marginMode == ACCOUNT_MARGIN_MODE_RETAIL_HEDGING);
+
+   // Filling Mode Detection
+   uint fillFlags = (uint)SymbolInfoInteger(actualSymbol, SYMBOL_FILLING_MODE);
+   if((fillFlags & SYMBOL_FILLING_FOK) != 0)
+      spec.executionFillingMode = ORDER_FILLING_FOK;
+   else if((fillFlags & SYMBOL_FILLING_IOC) != 0)
+      spec.executionFillingMode = ORDER_FILLING_IOC;
+   else
+      spec.executionFillingMode = ORDER_FILLING_RETURN;
 
    long spread = 0;
-   SymbolInfoInteger(symbol, SYMBOL_SPREAD, spread);
+   SymbolInfoInteger(actualSymbol, SYMBOL_SPREAD, spread);
    spec.currentSpreadPoints = (int)spread;
 
-   ENUM_SYMBOL_TRADE_MODE tradeMode = (ENUM_SYMBOL_TRADE_MODE)SymbolInfoInteger(symbol, SYMBOL_TRADE_MODE);
+   ENUM_SYMBOL_TRADE_MODE tradeMode = (ENUM_SYMBOL_TRADE_MODE)SymbolInfoInteger(actualSymbol, SYMBOL_TRADE_MODE);
    spec.isTradeAllowed      = (tradeMode == SYMBOL_TRADE_MODE_FULL);
 
    // Verify tick freshness
-   datetime lastTickTime = (datetime)SymbolInfoInteger(symbol, SYMBOL_TIME);
+   datetime lastTickTime = (datetime)SymbolInfoInteger(actualSymbol, SYMBOL_TIME);
    datetime currentTime  = TimeCurrent();
    spec.isDataFresh         = ((currentTime - lastTickTime) <= maxStaleSeconds);
 
