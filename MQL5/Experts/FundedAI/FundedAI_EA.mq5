@@ -223,6 +223,10 @@ int OnInit()
    g_profile.Configure(config);
    g_guard.SetProfile(&g_profile);
 
+   // Real Account Validation Check
+   string modeMsg = "";
+   g_guard.ValidateAccountTradeMode(modeMsg);
+
    // 2. Initialize Engines & Persistence
    g_riskManager.SetRiskMode(Inp_RiskMode, Inp_RiskPercent);
    g_portfolioManager.Init(Inp_MagicNumber);
@@ -255,7 +259,7 @@ int OnInit()
    g_lastDayChecked = TimeCurrent();
 
    EventSetTimer(1);
-   Print("FUNDED AI EA initialized successfully. Daily Loss Mode: ", EnumToString(Inp_DailyLossMode), " Drawdown Model: ", EnumToString(Inp_DrawdownModel));
+   Print("FUNDED AI EA initialized successfully. Account Mode: ", modeMsg, " Daily Loss Mode: ", EnumToString(Inp_DailyLossMode), " Drawdown Model: ", EnumToString(Inp_DrawdownModel));
    return(INIT_SUCCEEDED);
   }
 

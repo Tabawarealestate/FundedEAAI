@@ -14,7 +14,7 @@
 //+------------------------------------------------------------------+
 //| Class CChallengeGuard                                            |
 //| Dedicated Safety Engine enforcing challenge limits, equity       |
-//| drawdown rules, and emergency shutdown triggers.                  |
+//| drawdown rules, real account validation, and emergency shutdown. |
 //+------------------------------------------------------------------+
 class CChallengeGuard
   {
@@ -22,12 +22,17 @@ private:
    CChallengeProfile       *m_profile;
    ENUM_EA_STATUS           m_currentStatus;
    string                   m_lastStatusReason;
+   bool                     m_isRealAccount;
 
 public:
                      CChallengeGuard(void);
                     ~CChallengeGuard(void);
 
    void              SetProfile(CChallengeProfile *profile) { m_profile = profile; }
+
+   //--- Real Account Validation
+   bool              ValidateAccountTradeMode(string &validationMessage);
+   bool              IsRealAccount(void) const { return m_isRealAccount; }
 
    //--- Core Evaluation
    ENUM_EA_STATUS    EvaluateState(double currentBalance, double currentEquity, double dailyStartingEquity, double dailyStartingBalance, int activeTradingDays = 1);
@@ -46,7 +51,8 @@ public:
 CChallengeGuard::CChallengeGuard(void)
   : m_profile(NULL),
     m_currentStatus(EA_STATUS_ACTIVE),
-    m_lastStatusReason("Initial state: ACTIVE")
+    m_lastStatusReason("Initial state: ACTIVE"),
+    m_isRealAccount(false)
   {
   }
 
@@ -55,6 +61,31 @@ CChallengeGuard::CChallengeGuard(void)
 //+------------------------------------------------------------------+
 CChallengeGuard::~CChallengeGuard(void)
   {
+  }
+
+//+------------------------------------------------------------------+
+//| Validates Real vs Demo Account Execution Parameters               |
+//+------------------------------------------------------------------+
+bool CChallengeGuard::ValidateAccountTradeMode(string &validationMessage)
+  {
+   ENUM_ACCOUNT_TRADE_MODE tradeMode = (ENUM_ACCOUNT_TRADE_MODE)AccountInfoInteger(ACCOUNT_TRADE_MODE);
+   m_isRealAccount = (tradeMode == ACCOUNT_TRADE_MODE_REAL);
+
+   long leverage = AccountInfoInteger(ACCOUNT_LEVERAGE);
+   double marginSo = AccountInfoDouble(ACCOUNT_MARGIN_SO_SO);
+
+   if(m_isRealAccount)
+     {
+      validationMessage = StringFormat("REAL ACCOUNT DETECTED: Leverage 1:%d | StopOut Level: %.1f%%. ENFORCING STRICT REAL RISK GUARD.", leverage, marginSo);
+      Print("SAFEGUARD NOTICE: ", validationMessage);
+      return true;
+     }
+   else
+     {
+      validationMessage = StringFormat("DEMO / CONTEST ACCOUNT: Leverage 1:%d | Mode: %s", leverage, EnumToString(tradeMode));
+      Print("INFO: ", validationMessage);
+      return true;
+     }
   }
 
 //+------------------------------------------------------------------+
@@ -124,7 +155,7 @@ ENUM_EA_STATUS CChallengeGuard::EvaluateState(double currentBalance, double curr
 
    // Normal Operation
    m_currentStatus = EA_STATUS_ACTIVE;
-   m_lastStatusReason = "ACTIVE: Normal trading within safety limits.";
+   m_lastStatusReason = m_isRealAccount ? "ACTIVE (REAL MONEY GUARD): Normal trading within strict limits." : "ACTIVE: Normal trading within safety limits.";
    return m_currentStatus;
   }
 
