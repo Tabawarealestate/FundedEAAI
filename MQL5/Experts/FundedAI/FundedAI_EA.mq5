@@ -35,7 +35,7 @@ input string                 Inp_Section1            = "=== CHALLENGE PROFILE ==
 input double                 Inp_AccountBalance      = 100000.0;                   // Initial Challenge Balance ($)
 input ENUM_CHALLENGE_PHASE   Inp_ChallengePhase      = CHALLENGE_PHASE_1;          // Evaluation Phase
 input ENUM_DAILY_LOSS_MODE   Inp_DailyLossMode       = DAILY_LOSS_MODE_A_EQUITY;   // Daily Loss Calculation Mode
-input ENUM_DRAWDOWN_MODEL    Inp_DrawdownModel       = DRAWDOWN_STATIC;            // Drawdown Model (Static / Trailing)
+input ENUM_DRAWDOWN_MODEL    Inp_DrawdownModel       = DRAWDOWN_STATIC_BALANCE;    // Drawdown Model
 input ENUM_HWM_SOURCE       Inp_HWMSource           = HWM_SOURCE_EQUITY;          // High-Water Mark Source
 input bool                   Inp_UnrealizedMovesHWM  = true;                       // Floating Profit Moves HWM
 input double                 Inp_ProfitTarget        = 10.0;                       // Profit Target (%)
@@ -55,11 +55,13 @@ input string                 Inp_Section3            = "=== TIMEFRAMES & STRATEG
 input ENUM_TIMEFRAMES        Inp_HTFTimeframe        = PERIOD_H4;                  // Higher Timeframe Trend Bias
 input ENUM_TIMEFRAMES        Inp_LTFTimeframe        = PERIOD_M15;                 // Lower Timeframe Entry
 input int                    Inp_GMTOffsetHours      = 2;                          // Broker Server GMT Offset (Hours)
+input ENUM_DST_PROFILE       Inp_DSTProfile          = DST_EUROPE;                 // Daylight Saving Time Profile
 
 input string                 Inp_Section4            = "=== SAFETIES & SPREAD ==="; // --- SAFETY & EXECUTION ---
 input int                    Inp_MaxSpreadPoints     = 30;                         // Max Allowed Spread (Points)
 input int                    Inp_MaxSlippagePoints   = 10;                         // Max Allowed Slippage (Points)
 input bool                   Inp_EnableNewsFilter    = true;                       // Enforce High Impact News Protection
+input bool                   Inp_TesterNewsBypass    = true;                       // Explicit Strategy Tester News Bypass
 input ulong                  Inp_MagicNumber         = FUNDED_AI_DEFAULT_MAGIC;    // Magic Number
 
 //+------------------------------------------------------------------+
@@ -80,12 +82,22 @@ CStatePersist       g_statePersist;
 
 double              g_dailyStartingEquity  = 0.0;
 double              g_dailyStartingBalance = 0.0;
-datetime            g_lastDayChecked       = 0;
+int                 g_lastDateKeyChecked   = 0;
 datetime            g_lastBarTime          = 0;
 int                 g_consecutiveLosses    = 0;
 int                 g_activeTradingDays    = 0;
 double              g_latestSetupScore     = 0.0;
 ENUM_MARKET_REGIME  g_latestRegime         = REGIME_RANGE;
+
+//+------------------------------------------------------------------+
+//| Date Key Generator (YYYYMMDD)                                    |
+//+------------------------------------------------------------------+
+int GetCurrentDateKey(datetime t)
+  {
+   MqlDateTime dt;
+   TimeToStruct(t, dt);
+   return (dt.year * 10000) + (dt.mon * 100) + dt.day;
+  }
 
 //+------------------------------------------------------------------+
 //| Input Validator Engine                                           |
@@ -122,11 +134,10 @@ int ValidateInputs(void)
 
 //+------------------------------------------------------------------+
 //| Helper Function: Calculate Unique Traded Days From History        |
-//| Uses Dynamic Array to prevent array overflow errors              |
+//| Uses Dynamic Array & YYYYMMDD date keys                         |
 //+------------------------------------------------------------------+
 int CountUniqueTradingDaysFromHistory(ulong magicNumber)
   {
-   int uniqueDays = 0;
    if(!HistorySelect(0, TimeCurrent()))
       return 0;
 
@@ -134,8 +145,7 @@ int CountUniqueTradingDaysFromHistory(ulong magicNumber)
    if(totalDeals <= 0)
       return 0;
 
-   datetime tradedDates[];
-   ArrayResize(tradedDates, totalDeals);
+   int tradedDateKeys[];
    int dateCount = 0;
 
    for(int i = 0; i < totalDeals; i++)
@@ -144,14 +154,12 @@ int CountUniqueTradingDaysFromHistory(ulong magicNumber)
       if(dealTicket > 0 && HistoryDealGetInteger(dealTicket, DEAL_MAGIC) == (long)magicNumber)
         {
          datetime dealTime = (datetime)HistoryDealGetInteger(dealTicket, DEAL_TIME);
-         MqlDateTime dt;
-         TimeToStruct(dealTime, dt);
-         datetime dayTimestamp = StructToTime(dt) - (dt.hour * 3600 + dt.min * 60 + dt.sec);
+         int dk = GetCurrentDateKey(dealTime);
 
          bool exists = false;
          for(int k = 0; k < dateCount; k++)
            {
-            if(tradedDates[k] == dayTimestamp)
+            if(tradedDateKeys[k] == dk)
               {
                exists = true;
                break;
@@ -159,7 +167,8 @@ int CountUniqueTradingDaysFromHistory(ulong magicNumber)
            }
          if(!exists)
            {
-            tradedDates[dateCount] = dayTimestamp;
+            ArrayResize(tradedDateKeys, dateCount + 1);
+            tradedDateKeys[dateCount] = dk;
             dateCount++;
            }
         }
@@ -193,6 +202,7 @@ int OnInit()
 
    // 1. Initialize Challenge Profile
    SChallengeProfileConfig config;
+   config.profileID                 = StringFormat("PROF_%.0f_PH%d_DD%d", Inp_AccountBalance, (int)Inp_ChallengePhase, (int)Inp_DrawdownModel);
    config.profileName               = "Configured Prop Profile";
    config.initialBalance            = Inp_AccountBalance;
    config.phase                     = Inp_ChallengePhase;
@@ -212,6 +222,7 @@ int OnInit()
    config.maxPortfolioRiskPercent   = Inp_MaxPortfolioRisk;
    config.maxLotSize                = 0.0;
    config.gmtOffsetHours            = Inp_GMTOffsetHours;
+   config.dstProfile                = Inp_DSTProfile;
    config.customRulesDescription    = "Live Rule-Aware Enforcement";
 
    config.dailyLossWarningPercent   = Inp_MaxDailyLoss * 0.60;
@@ -241,25 +252,34 @@ int OnInit()
    // 3. Recover Account History Traded Days & High-Water Mark State
    g_activeTradingDays = CountUniqueTradingDaysFromHistory(Inp_MagicNumber);
 
-   double savedStartBal = 0.0, savedDailyEq = 0.0, savedDailyBal = 0.0, savedHWM = 0.0;
-   int savedDays = 0;
-   if(g_statePersist.LoadState(savedStartBal, savedDailyEq, savedDailyBal, savedHWM, savedDays))
+   SChallengeStatePersist recoveredState;
+   if(g_statePersist.LoadState(recoveredState))
      {
-      g_dailyStartingEquity  = savedDailyEq;
-      g_dailyStartingBalance = savedDailyBal;
-      g_profile.SetHighWaterMark(savedHWM); // Restore recovered High-Water Mark into profile
-      Print("RECOVERED PERSISTED STATE: Daily Equity = $", savedDailyEq, " HWM = $", savedHWM, " History Days = ", g_activeTradingDays);
+      if(recoveredState.profileID != config.profileID)
+        {
+         Print("CHALLENGE PROFILE MISMATCH: Persisted Profile ID (", recoveredState.profileID, ") differs from current input profile ID (", config.profileID, "). Rebuilding state safely from account history.");
+         g_dailyStartingEquity  = AccountInfoDouble(ACCOUNT_EQUITY);
+         g_dailyStartingBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+        }
+      else
+        {
+         g_dailyStartingEquity  = recoveredState.dailyStartingEquity;
+         g_dailyStartingBalance = recoveredState.dailyStartingBalance;
+         g_profile.SetHighWaterMark(recoveredState.highWaterMark);
+         Print("STATE RESTORED FROM BINARY PERSISTENCE: Profile ID = ", recoveredState.profileID, " Daily Equity = $", recoveredState.dailyStartingEquity, " HWM = $", recoveredState.highWaterMark);
+        }
      }
    else
      {
       g_dailyStartingEquity  = AccountInfoDouble(ACCOUNT_EQUITY);
       g_dailyStartingBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+      Print("STATE REBUILT FROM ACCOUNT HISTORY: Daily Equity = $", g_dailyStartingEquity);
      }
 
-   g_lastDayChecked = TimeCurrent();
+   g_lastDateKeyChecked = GetCurrentDateKey(TimeCurrent());
 
    EventSetTimer(1);
-   Print("FUNDED AI EA initialized successfully. Account Mode: ", modeMsg, " Daily Loss Mode: ", EnumToString(Inp_DailyLossMode), " Drawdown Model: ", EnumToString(Inp_DrawdownModel));
+   Print("FUNDED AI EA initialized successfully. Account Mode: ", modeMsg, " Drawdown Model: ", EnumToString(Inp_DrawdownModel));
    return(INIT_SUCCEEDED);
   }
 
@@ -270,7 +290,24 @@ void OnDeinit(const int reason)
   {
    EventKillTimer();
    SChallengeAccountStatus status = g_profile.GetStatus();
-   g_statePersist.SaveState(status.startingBalance, g_dailyStartingEquity, g_dailyStartingBalance, status.highWaterMark, g_activeTradingDays);
+
+   SChallengeStatePersist stateToSave;
+   stateToSave.profileID             = status.profileID;
+   stateToSave.configVersion         = 100;
+   stateToSave.phase                 = Inp_ChallengePhase;
+   stateToSave.challengeStartTime    = TimeCurrent();
+   stateToSave.startingBalance       = status.startingBalance;
+   stateToSave.dailyStartingBalance  = g_dailyStartingBalance;
+   stateToSave.dailyStartingEquity   = g_dailyStartingEquity;
+   stateToSave.highWaterMark         = status.highWaterMark;
+   stateToSave.hwmSource             = Inp_HWMSource;
+   stateToSave.drawdownModel         = Inp_DrawdownModel;
+   stateToSave.unrealizedMovesHWM    = Inp_UnrealizedMovesHWM;
+   stateToSave.lastDailyResetDateKey = g_lastDateKeyChecked;
+   stateToSave.activeTradingDays     = g_activeTradingDays;
+   stateToSave.lastStateSaveTime     = TimeCurrent();
+
+   g_statePersist.SaveState(stateToSave);
    g_dashboard.Destroy();
    Print("FUNDED AI EA deinitialized and state persisted. Reason: ", reason);
   }
@@ -281,19 +318,16 @@ void OnDeinit(const int reason)
 void OnTimer()
   {
    datetime now = TimeCurrent();
-   MqlDateTime dt;
-   TimeToStruct(now, dt);
+   int nowDateKey = GetCurrentDateKey(now);
 
-   // Detect New Trading Day (Midnight Reset)
-   MqlDateTime lastDt;
-   TimeToStruct(g_lastDayChecked, lastDt);
-   if(dt.day != lastDt.day)
+   // Detect New Calendar Trading Day (Date Key Change)
+   if(nowDateKey != g_lastDateKeyChecked)
      {
       g_activeTradingDays    = CountUniqueTradingDaysFromHistory(Inp_MagicNumber);
       g_dailyStartingEquity  = AccountInfoDouble(ACCOUNT_EQUITY);
       g_dailyStartingBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-      g_lastDayChecked       = now;
-      Print("NEW TRADING DAY DETECTED. History Active Day Count: #", g_activeTradingDays, " Daily starting equity: $", DoubleToString(g_dailyStartingEquity, 2));
+      g_lastDateKeyChecked   = nowDateKey;
+      Print("NEW CALENDAR TRADING DAY DETECTED (DateKey: ", nowDateKey, "). History Active Days: #", g_activeTradingDays, " Daily starting equity: $", DoubleToString(g_dailyStartingEquity, 2));
      }
 
    // Evaluate Safety Guard State
@@ -303,6 +337,9 @@ void OnTimer()
 
    // Update consecutive loss tracker from closed trade deals
    g_consecutiveLosses = g_tradeManager.GetConsecutiveLossCount(Inp_MagicNumber);
+
+   MqlDateTime dt;
+   TimeToStruct(now, dt);
 
    // Weekend Holding Rule Enforcement (Close trades Friday evening if holding prohibited)
    if(!Inp_AllowWeekendHolding && dt.day_of_week == 5 && dt.hour >= 21)
@@ -320,15 +357,31 @@ void OnTimer()
 
    // Update Dashboard Visual Panel
    double portRisk = g_portfolioManager.GetTotalPortfolioRiskPercent(equity);
-   ENUM_TRADING_SESSION currentSess = CSessionEngine::GetCurrentSession(now, Inp_GMTOffsetHours);
+   ENUM_TRADING_SESSION currentSess = CSessionEngine::GetCurrentSession(now, Inp_GMTOffsetHours, Inp_DSTProfile);
    string sessStr = EnumToString(currentSess);
    string newsStr = g_newsEngine.GetNewsStatusString();
 
    g_dashboard.Update(g_profile.GetStatus(), status, g_latestRegime, g_latestSetupScore, g_guard.GetStatusReason(), newsStr, sessStr, portRisk);
 
-   // Save State
+   // Save Persisted State
    SChallengeAccountStatus accStatus = g_profile.GetStatus();
-   g_statePersist.SaveState(accStatus.startingBalance, g_dailyStartingEquity, g_dailyStartingBalance, accStatus.highWaterMark, g_activeTradingDays);
+   SChallengeStatePersist stateToSave;
+   stateToSave.profileID             = accStatus.profileID;
+   stateToSave.configVersion         = 100;
+   stateToSave.phase                 = Inp_ChallengePhase;
+   stateToSave.challengeStartTime    = now;
+   stateToSave.startingBalance       = accStatus.startingBalance;
+   stateToSave.dailyStartingBalance  = g_dailyStartingBalance;
+   stateToSave.dailyStartingEquity   = g_dailyStartingEquity;
+   stateToSave.highWaterMark         = accStatus.highWaterMark;
+   stateToSave.hwmSource             = Inp_HWMSource;
+   stateToSave.drawdownModel         = Inp_DrawdownModel;
+   stateToSave.unrealizedMovesHWM    = Inp_UnrealizedMovesHWM;
+   stateToSave.lastDailyResetDateKey = g_lastDateKeyChecked;
+   stateToSave.activeTradingDays     = g_activeTradingDays;
+   stateToSave.lastStateSaveTime     = now;
+
+   g_statePersist.SaveState(stateToSave);
 
    // Emergency Liquidation if Safety Guard triggers Lockdown
    if(g_guard.ShouldCloseAllPositions())

@@ -13,19 +13,21 @@
 //+------------------------------------------------------------------+
 //| Class CNewsFilterEngine                                          |
 //| Native MT5 Economic Calendar API Engine handling high-impact     |
-//| macro news filtering, currency mapping, and fail-safe blocking. |
+//| macro news filtering, currency mapping, and explicit status logs. |
 //+------------------------------------------------------------------+
 class CNewsFilterEngine
   {
 private:
    bool m_isNewsFilterEnabled;
    bool m_isCalendarAttached;
+   bool m_allowTesterBypass;
 
 public:
                      CNewsFilterEngine(void);
                     ~CNewsFilterEngine(void);
 
    void              SetEnabled(bool enabled) { m_isNewsFilterEnabled = enabled; }
+   void              SetTesterBypass(bool allowBypass) { m_allowTesterBypass = allowBypass; }
    bool              IsNewsFilterActive(void) const { return m_isNewsFilterEnabled; }
    bool              IsNewsDataAvailable(void) const { return m_isCalendarAttached; }
    string            GetNewsStatusString(void) const;
@@ -42,7 +44,8 @@ private:
 //+------------------------------------------------------------------+
 CNewsFilterEngine::CNewsFilterEngine(void)
   : m_isNewsFilterEnabled(true),
-    m_isCalendarAttached(false)
+    m_isCalendarAttached(false),
+    m_allowTesterBypass(true)
   {
   }
 
@@ -68,17 +71,22 @@ void CNewsFilterEngine::GetSymbolCurrencies(string symbol, string &baseCurr, str
   }
 
 //+------------------------------------------------------------------+
-//| Returns human-readable news status string                        |
+//| Returns honest human-readable news status string                 |
 //+------------------------------------------------------------------+
 string CNewsFilterEngine::GetNewsStatusString(void) const
   {
    if(!m_isNewsFilterEnabled)
       return "NEWS FILTER DISABLED";
    if(MqlInfoInteger(MQL_TESTER))
-      return "NEWS FILTER TESTER BYPASS";
+     {
+      if(m_allowTesterBypass)
+         return "TESTER BYPASS: EXPLICITLY ENABLED";
+      else
+         return "TESTER: NEWS DATA UNAVAILABLE - TRADES BLOCKED";
+     }
    if(!m_isCalendarAttached)
-      return "NEWS DATA UNAVAILABLE - TRADES BLOCKED";
-   return "NEWS FILTER ACTIVE";
+      return "LIVE: NEWS DATA UNAVAILABLE - TRADES BLOCKED";
+   return "LIVE: NEWS FILTER ACTIVE";
   }
 
 //+------------------------------------------------------------------+
@@ -92,11 +100,19 @@ bool CNewsFilterEngine::IsHighImpactNewsImminent(string symbol, datetime timeCur
       return false;
      }
 
-   // Graceful Strategy Tester bypass (MT5 Calendar API is not supported in backtesting)
+   // Honest Strategy Tester handling
    if(MqlInfoInteger(MQL_TESTER))
      {
-      m_isCalendarAttached = true;
-      return false;
+      if(m_allowTesterBypass)
+        {
+         m_isCalendarAttached = false;
+         return false; // Explicit tester bypass permitted
+        }
+      else
+        {
+         m_isCalendarAttached = false;
+         return true; // Safe block in tester when bypass disabled
+        }
      }
 
    string baseCurr, marginCurr;

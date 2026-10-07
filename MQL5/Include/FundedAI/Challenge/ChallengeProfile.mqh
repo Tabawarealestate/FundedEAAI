@@ -40,9 +40,10 @@ public:
    double            GetMaxDailyLossPercent(void) const { return m_config.maxDailyLossPercent; }
    double            GetMaxOverallLossPercent(void) const { return m_config.maxOverallLossPercent; }
    ENUM_CHALLENGE_PHASE GetPhase(void) const { return m_config.phase; }
+   string            GetProfileID(void) const { return m_config.profileID; }
 
    //--- Calculation & Tracking Methods
-   void              UpdateAccountStatus(double currentBalance, double currentEquity, double dailyStartingEquity, double dailyStartingBalance, int activeTradingDays = 1);
+   void              UpdateAccountStatus(double currentBalance, double currentEquity, double dailyStartingEquity, double dailyStartingBalance, int activeTradingDays = 1, int currentDateKey = 0);
    bool              IsDailyLossWarning(void) const;
    bool              IsDailyLossSoftStop(void) const;
    bool              IsDailyLossEmergency(void) const;
@@ -76,9 +77,10 @@ void CChallengeProfile::LoadDefaultPreset(double initialBalance, ENUM_CHALLENGE_
    m_config.initialBalance        = (initialBalance > 0.0) ? initialBalance : 100000.0;
    m_config.phase                 = phase;
    m_config.dailyLossMode         = DAILY_LOSS_MODE_A_EQUITY;
-   m_config.drawdownModel         = DRAWDOWN_STATIC;
+   m_config.drawdownModel         = DRAWDOWN_STATIC_BALANCE;
    m_config.hwmSource             = HWM_SOURCE_EQUITY;
    m_config.unrealizedMovesHWM    = true;
+   m_config.profileID             = StringFormat("PROF_DEFAULT_%.0f_PH%d", m_config.initialBalance, (int)phase);
 
    //--- Set Profit Target based on phase
    if(phase == CHALLENGE_PHASE_1)
@@ -109,9 +111,10 @@ void CChallengeProfile::LoadDefaultPreset(double initialBalance, ENUM_CHALLENGE_
    m_config.maxLossEmergencyPercent   = 8.5; // 8.5% total drawdown locks EA
 
    m_status.highWaterMark = m_config.initialBalance;
+   m_status.profileID     = m_config.profileID;
 
    // Initialize Status
-   UpdateAccountStatus(m_config.initialBalance, m_config.initialBalance, m_config.initialBalance, m_config.initialBalance, 1);
+   UpdateAccountStatus(m_config.initialBalance, m_config.initialBalance, m_config.initialBalance, m_config.initialBalance, 1, 0);
   }
 
 //+------------------------------------------------------------------+
@@ -120,9 +123,10 @@ void CChallengeProfile::LoadDefaultPreset(double initialBalance, ENUM_CHALLENGE_
 void CChallengeProfile::Configure(const SChallengeProfileConfig &config)
   {
    m_config = config;
+   m_status.profileID = m_config.profileID;
    if(m_status.highWaterMark < m_config.initialBalance)
       m_status.highWaterMark = m_config.initialBalance;
-   UpdateAccountStatus(m_config.initialBalance, m_config.initialBalance, m_config.initialBalance, m_config.initialBalance, 1);
+   UpdateAccountStatus(m_config.initialBalance, m_config.initialBalance, m_config.initialBalance, m_config.initialBalance, 1, 0);
   }
 
 //+------------------------------------------------------------------+
@@ -142,14 +146,16 @@ void CChallengeProfile::SetPhase(ENUM_CHALLENGE_PHASE phase)
 //+------------------------------------------------------------------+
 //| Updates current account metrics & calculates safety margins      |
 //+------------------------------------------------------------------+
-void CChallengeProfile::UpdateAccountStatus(double currentBalance, double currentEquity, double dailyStartingEquity, double dailyStartingBalance, int activeTradingDays)
+void CChallengeProfile::UpdateAccountStatus(double currentBalance, double currentEquity, double dailyStartingEquity, double dailyStartingBalance, int activeTradingDays, int currentDateKey)
   {
+   m_status.profileID             = m_config.profileID;
    m_status.startingBalance       = m_config.initialBalance;
    m_status.currentBalance        = currentBalance;
    m_status.currentEquity         = currentEquity;
    m_status.dailyStartingEquity   = (dailyStartingEquity > 0.0) ? dailyStartingEquity : currentEquity;
    m_status.dailyStartingBalance  = (dailyStartingBalance > 0.0) ? dailyStartingBalance : currentBalance;
    m_status.activeTradingDays     = activeTradingDays;
+   m_status.lastDailyResetDateKey = currentDateKey;
    m_status.isMinTradingDaysMet   = (activeTradingDays >= m_config.minTradingDays);
 
    // Update Peak High-Water Mark based on configured source (Equity vs Balance)
@@ -157,6 +163,7 @@ void CChallengeProfile::UpdateAccountStatus(double currentBalance, double curren
    if(!m_config.unrealizedMovesHWM)
       hwmReference = currentBalance; // Pure balance HWM if unrealized profit excluded
 
+   // HWM is monotonic - never moves backward
    if(hwmReference > m_status.highWaterMark)
       m_status.highWaterMark = hwmReference;
 
@@ -169,10 +176,14 @@ void CChallengeProfile::UpdateAccountStatus(double currentBalance, double curren
       m_status.dailyPL = currentEquity - MathMin(m_status.dailyStartingEquity, m_status.dailyStartingBalance);
 
    //--- Overall Drawdown Calculation according to Drawdown Model
-   if(m_config.drawdownModel == DRAWDOWN_STATIC)
+   if(m_config.drawdownModel == DRAWDOWN_STATIC_BALANCE)
       m_status.overallPL = currentEquity - m_status.startingBalance;
-   else
+   else if(m_config.drawdownModel == DRAWDOWN_STATIC_EQUITY)
+      m_status.overallPL = currentEquity - m_status.startingBalance;
+   else if(m_config.drawdownModel == TRAILING_BALANCE_HWM || m_config.drawdownModel == TRAILING_EQUITY_HWM)
       m_status.overallPL = currentEquity - m_status.highWaterMark;
+   else
+      m_status.overallPL = currentEquity - m_status.startingBalance;
 
    //--- Daily Drawdown %
    double dailyBase = (m_config.dailyLossMode == DAILY_LOSS_MODE_B_BALANCE) ? m_status.dailyStartingBalance : m_status.dailyStartingEquity;
@@ -182,7 +193,7 @@ void CChallengeProfile::UpdateAccountStatus(double currentBalance, double curren
       m_status.currentDailyDrawdownPercent = 0.0;
 
    //--- Overall Drawdown %
-   double overallBase = (m_config.drawdownModel == DRAWDOWN_STATIC) ? m_status.startingBalance : m_status.highWaterMark;
+   double overallBase = (m_config.drawdownModel == TRAILING_BALANCE_HWM || m_config.drawdownModel == TRAILING_EQUITY_HWM) ? m_status.highWaterMark : m_status.startingBalance;
    if(m_status.overallPL < 0.0 && overallBase > 0.0)
       m_status.currentOverallDrawdownPercent = (-m_status.overallPL / overallBase) * 100.0;
    else

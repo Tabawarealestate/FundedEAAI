@@ -31,12 +31,14 @@ enum ENUM_DAILY_LOSS_MODE
   };
 
 //+------------------------------------------------------------------+
-//| Enumeration: Overall Drawdown Calculation Model                  |
+//| Enumeration: Explicit Overall Drawdown Calculation Model         |
 //+------------------------------------------------------------------+
 enum ENUM_DRAWDOWN_MODEL
   {
-   DRAWDOWN_STATIC   = 1, // Static Max Loss relative to Initial Starting Balance
-   DRAWDOWN_TRAILING = 2  // Trailing Max Loss relative to Peak High-Water Mark
+   DRAWDOWN_STATIC_BALANCE = 1, // Static Max Loss relative to Initial Balance
+   DRAWDOWN_STATIC_EQUITY  = 2, // Static Max Loss relative to Initial Equity
+   TRAILING_BALANCE_HWM    = 3, // Trailing Max Loss relative to Peak Balance HWM
+   TRAILING_EQUITY_HWM     = 4  // Trailing Max Loss relative to Peak Equity HWM
   };
 
 //+------------------------------------------------------------------+
@@ -46,6 +48,17 @@ enum ENUM_HWM_SOURCE
   {
    HWM_SOURCE_BALANCE = 1, // High-Water Mark tracked from Peak Balance
    HWM_SOURCE_EQUITY  = 2  // High-Water Mark tracked from Peak Equity
+  };
+
+//+------------------------------------------------------------------+
+//| Enumeration: Daylight Saving Time (DST) Profiles                 |
+//+------------------------------------------------------------------+
+enum ENUM_DST_PROFILE
+  {
+   DST_NONE   = 0, // No DST Adjustment
+   DST_EUROPE = 1, // European DST (Last Sunday March to Last Sunday October)
+   DST_US     = 2, // US DST (Second Sunday March to First Sunday November)
+   DST_MANUAL = 3  // Manual DST Offset Override
   };
 
 //+------------------------------------------------------------------+
@@ -125,11 +138,12 @@ enum ENUM_SETUP_QUALITY
 //+------------------------------------------------------------------+
 struct SChallengeProfileConfig
   {
+   string                profileID;                   // Unique Profile Hash/ID
    string                profileName;                 // Name of Prop Firm / Custom Profile
    double                initialBalance;              // Base Capital (e.g. $100,000)
    ENUM_CHALLENGE_PHASE  phase;                       // Phase 1, Phase 2, Funded, Custom
    ENUM_DAILY_LOSS_MODE  dailyLossMode;               // Mode A (Equity), Mode B (Balance), Mode C
-   ENUM_DRAWDOWN_MODEL   drawdownModel;               // Static vs Trailing High-Water Mark
+   ENUM_DRAWDOWN_MODEL   drawdownModel;               // Static Balance, Static Equity, Trailing Balance, Trailing Equity
    ENUM_HWM_SOURCE       hwmSource;                   // Peak Balance vs Peak Equity
    bool                  unrealizedMovesHWM;          // True if floating profit moves HWM
    double                profitTargetPercent;         // Target Profit (e.g. 10.0%)
@@ -144,6 +158,7 @@ struct SChallengeProfileConfig
    double                maxPortfolioRiskPercent;     // Max total portfolio risk across open trades
    double                maxLotSize;                  // Max lot size limit (0 = auto)
    int                   gmtOffsetHours;              // Broker GMT Offset in Hours
+   ENUM_DST_PROFILE      dstProfile;                  // Daylight Saving Time Profile
    string                customRulesDescription;      // Extra rule notes
 
    //--- Safety Buffers
@@ -159,6 +174,7 @@ struct SChallengeProfileConfig
 //+------------------------------------------------------------------+
 struct SChallengeAccountStatus
   {
+   string                profileID;                   // Profile Identity
    double                startingBalance;             // Initial Challenge Balance
    double                currentBalance;              // Current Account Balance
    double                currentEquity;               // Current Account Equity
@@ -173,9 +189,31 @@ struct SChallengeAccountStatus
    double                remainingOverallLossAllowance;// Dollars remaining before overall drawdown limit
    double                targetProgressPercent;       // Progress towards profit target (0 - 100%)
    int                   activeTradingDays;           // Days traded so far
+   int                   lastDailyResetDateKey;       // YearMonthDay Integer Key (e.g. 20261007)
    bool                  isTargetReached;             // True if profit target achieved
    bool                  isMinTradingDaysMet;         // True if minimum trading days met
    bool                  isDailyLimitBreached;        // True if daily safety/hard limit breached
    bool                  isOverallLimitBreached;      // True if overall safety/hard limit breached
    bool                  isNewsDataAvailable;         // False = NEWS DATA UNAVAILABLE
+  };
+
+//+------------------------------------------------------------------+
+//| Struct: Complete Persisted State Recovery Package               |
+//+------------------------------------------------------------------+
+struct SChallengeStatePersist
+  {
+   string                profileID;                   // Profile Identity Code
+   int                   configVersion;               // Version Code
+   ENUM_CHALLENGE_PHASE  phase;                       // Challenge Phase
+   datetime              challengeStartTime;          // Challenge Creation Time
+   double                startingBalance;             // Initial Challenge Balance
+   double                dailyStartingBalance;        // Daily Baseline Balance
+   double                dailyStartingEquity;         // Daily Baseline Equity
+   double                highWaterMark;               // Peak High-Water Mark
+   ENUM_HWM_SOURCE       hwmSource;                   // HWM Source (Balance/Equity)
+   ENUM_DRAWDOWN_MODEL   drawdownModel;               // Drawdown Model
+   bool                  unrealizedMovesHWM;          // Unrealized Profit Flag
+   int                   lastDailyResetDateKey;       // Date Key of last reset (YYYYMMDD)
+   int                   activeTradingDays;           // Traded Days
+   datetime              lastStateSaveTime;           // Last Saved Timestamp
   };

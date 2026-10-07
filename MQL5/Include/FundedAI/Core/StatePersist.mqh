@@ -12,31 +12,30 @@
 
 //+------------------------------------------------------------------+
 //| Class CStatePersist                                              |
-//| Persists and recovers challenge state using MT5 GlobalVariables  |
-//| across EA / terminal restarts or chart removals.                 |
+//| Binary file state persistence and crash recovery engine.          |
 //+------------------------------------------------------------------+
 class CStatePersist
   {
 private:
-   string m_prefix;
+   string m_fileName;
+   ulong  m_magicNumber;
 
 public:
                      CStatePersist(void);
                     ~CStatePersist(void);
 
    void              Init(ulong magicNumber);
-
-   //--- Save & Load Methods
-   void              SaveState(double startBalance, double dailyStartEquity, double dailyStartBalance, double highWaterMark, int activeDays);
-   bool              LoadState(double &startBalance, double &dailyStartEquity, double &dailyStartBalance, double &highWaterMark, int &activeDays);
-   void              ClearState(void);
+   bool              SaveState(const SChallengeStatePersist &state);
+   bool              LoadState(SChallengeStatePersist &state);
+   void              DeleteStateFile(void);
   };
 
 //+------------------------------------------------------------------+
 //| Constructor                                                      |
 //+------------------------------------------------------------------+
 CStatePersist::CStatePersist(void)
-  : m_prefix("FAI_State_")
+  : m_magicNumber(FUNDED_AI_DEFAULT_MAGIC),
+    m_fileName("FundedAI_State_888999.bin")
   {
   }
 
@@ -48,56 +47,85 @@ CStatePersist::~CStatePersist(void)
   }
 
 //+------------------------------------------------------------------+
-//| Initializes state persistence prefix                             |
+//| Sets Magic Number & constructs unique filename                  |
 //+------------------------------------------------------------------+
 void CStatePersist::Init(ulong magicNumber)
   {
-   m_prefix = StringFormat("FAI_State_%llu_", magicNumber);
+   m_magicNumber = magicNumber;
+   m_fileName    = StringFormat("FundedAI_State_%I64u.bin", m_magicNumber);
   }
 
 //+------------------------------------------------------------------+
-//| Saves challenge parameters into MT5 GlobalVariables             |
+//| Saves challenge state struct to binary file                     |
 //+------------------------------------------------------------------+
-void CStatePersist::SaveState(double startBalance, double dailyStartEquity, double dailyStartBalance, double highWaterMark, int activeDays)
+bool CStatePersist::SaveState(const SChallengeStatePersist &state)
   {
-   GlobalVariableSet(m_prefix + "StartBalance", startBalance);
-   GlobalVariableSet(m_prefix + "DailyEquity", dailyStartEquity);
-   GlobalVariableSet(m_prefix + "DailyBalance", dailyStartBalance);
-   GlobalVariableSet(m_prefix + "HighWaterMark", highWaterMark);
-   GlobalVariableSet(m_prefix + "ActiveDays", (double)activeDays);
-   GlobalVariableSet(m_prefix + "LastSaveTime", (double)TimeCurrent());
+   int fileHandle = FileOpen(m_fileName, FILE_WRITE | FILE_BIN);
+   if(fileHandle == INVALID_HANDLE)
+     {
+      Print("ERROR: Could not open state file for writing: ", m_fileName);
+      return false;
+     }
+
+   FileWriteString(fileHandle, state.profileID, 64);
+   FileWriteInteger(fileHandle, state.configVersion);
+   FileWriteInteger(fileHandle, (int)state.phase);
+   FileWriteInteger(fileHandle, (long)state.challengeStartTime);
+   FileWriteDouble(fileHandle, state.startingBalance);
+   FileWriteDouble(fileHandle, state.dailyStartingBalance);
+   FileWriteDouble(fileHandle, state.dailyStartingEquity);
+   FileWriteDouble(fileHandle, state.highWaterMark);
+   FileWriteInteger(fileHandle, (int)state.hwmSource);
+   FileWriteInteger(fileHandle, (int)state.drawdownModel);
+   FileWriteInteger(fileHandle, state.unrealizedMovesHWM ? 1 : 0);
+   FileWriteInteger(fileHandle, state.lastDailyResetDateKey);
+   FileWriteInteger(fileHandle, state.activeTradingDays);
+   FileWriteInteger(fileHandle, (long)TimeCurrent());
+
+   FileClose(fileHandle);
+   return true;
   }
 
 //+------------------------------------------------------------------+
-//| Recovers challenge state from MT5 GlobalVariables               |
+//| Loads challenge state struct from binary file                   |
 //+------------------------------------------------------------------+
-bool CStatePersist::LoadState(double &startBalance, double &dailyStartEquity, double &dailyStartBalance, double &highWaterMark, int &activeDays)
+bool CStatePersist::LoadState(SChallengeStatePersist &state)
   {
-   string key = m_prefix + "StartBalance";
-   if(!GlobalVariableCheck(key))
+   if(!FileIsExist(m_fileName))
       return false;
 
-   startBalance      = GlobalVariableGet(m_prefix + "StartBalance");
-   dailyStartEquity  = GlobalVariableGet(m_prefix + "DailyEquity");
-   dailyStartBalance = GlobalVariableGet(m_prefix + "DailyBalance");
-   highWaterMark     = GlobalVariableGet(m_prefix + "HighWaterMark");
-   activeDays        = (int)GlobalVariableGet(m_prefix + "ActiveDays");
+   int fileHandle = FileOpen(m_fileName, FILE_READ | FILE_BIN);
+   if(fileHandle == INVALID_HANDLE)
+      return false;
 
-   if(startBalance <= 0.0)
+   state.profileID             = FileReadString(fileHandle, 64);
+   state.configVersion         = (int)FileReadInteger(fileHandle);
+   state.phase                 = (ENUM_CHALLENGE_PHASE)FileReadInteger(fileHandle);
+   state.challengeStartTime    = (datetime)FileReadInteger(fileHandle);
+   state.startingBalance       = FileReadDouble(fileHandle);
+   state.dailyStartingBalance  = FileReadDouble(fileHandle);
+   state.dailyStartingEquity   = FileReadDouble(fileHandle);
+   state.highWaterMark         = FileReadDouble(fileHandle);
+   state.hwmSource             = (ENUM_HWM_SOURCE)FileReadInteger(fileHandle);
+   state.drawdownModel         = (ENUM_DRAWDOWN_MODEL)FileReadInteger(fileHandle);
+   state.unrealizedMovesHWM    = (FileReadInteger(fileHandle) == 1);
+   state.lastDailyResetDateKey = (int)FileReadInteger(fileHandle);
+   state.activeTradingDays     = (int)FileReadInteger(fileHandle);
+   state.lastStateSaveTime     = (datetime)FileReadInteger(fileHandle);
+
+   FileClose(fileHandle);
+
+   if(state.startingBalance <= 0.0 || state.highWaterMark <= 0.0)
       return false;
 
    return true;
   }
 
 //+------------------------------------------------------------------+
-//| Clears stored state variables                                    |
+//| Deletes state persistence file                                   |
 //+------------------------------------------------------------------+
-void CStatePersist::ClearState(void)
+void CStatePersist::DeleteStateFile(void)
   {
-   GlobalVariableDel(m_prefix + "StartBalance");
-   GlobalVariableDel(m_prefix + "DailyEquity");
-   GlobalVariableDel(m_prefix + "DailyBalance");
-   GlobalVariableDel(m_prefix + "HighWaterMark");
-   GlobalVariableDel(m_prefix + "ActiveDays");
-   GlobalVariableDel(m_prefix + "LastSaveTime");
+   if(FileIsExist(m_fileName))
+      FileDelete(m_fileName);
   }
