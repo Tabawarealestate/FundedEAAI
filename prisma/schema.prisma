@@ -1,0 +1,491 @@
+// Prisma Schema for Hikima X10 AI Platform
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum UserAccessType {
+  FREE
+  PREMIUM
+}
+
+enum SubscriptionStatus {
+  FREE
+  ACTIVE
+  EXPIRED
+  CANCELLED
+  PAYMENT_PENDING
+  PAYMENT_FAILED
+  SUSPENDED
+}
+
+enum AdminRole {
+  SUPER_ADMIN
+  ADMIN
+  FINANCIAL_ADMIN
+  RISK_ADMIN
+  SUPPORT_ADMIN
+  MARKET_OPERATOR
+  ANALYST
+  READ_ONLY
+}
+
+enum SignalDirection {
+  BUY
+  SELL
+  NO_TRADE
+}
+
+enum SignalStatus {
+  GENERATED
+  SENT
+  ACTIVE
+  ENTRY_REACHED
+  TP1_HIT
+  TP2_HIT
+  TP3_HIT
+  SL_MOVED_TO_ENTRY
+  BREAKEVEN
+  PARTIAL_CLOSED
+  REENTRY_AVAILABLE
+  SL_HIT
+  EXPIRED
+  CANCELLED
+  INVALIDATED
+}
+
+enum MarketCategory {
+  FOREX
+  METALS
+  CRYPTO
+  COMMODITIES
+  INDICES
+  STOCKS
+}
+
+model User {
+  id               String          @id @default(uuid())
+  email            String?         @unique
+  accessType       UserAccessType  @default(FREE)
+  freeCodeUsed     String?
+  trialStartDate   DateTime?
+  trialEndDate     DateTime?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  telegramUser     TelegramUser?
+  subscriptions    Subscription[]
+  payments         Payment[]
+  preferences      UserPreference?
+  watchlist        Watchlist[]
+  userStrategies   UserStrategy[]
+  auditLogs        AuditLog[]
+  notifications    Notification[]
+
+  @@map("users")
+}
+
+model TelegramUser {
+  id               String      @id @default(uuid())
+  userId           String      @unique
+  user             User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  telegramId       BigInt      @unique
+  username         String?
+  firstName        String?
+  lastName         String?
+  languageCode     String      @default("en")
+  isBot            Boolean     @default(false)
+  chatId           BigInt?
+  dailySignalCount Int         @default(0)
+  lastSignalDate   DateTime?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  @@map("telegram_users")
+}
+
+model Plan {
+  id             String         @id @default(uuid())
+  code           String         @unique // e.g. MONTHLY, YEARLY, ELITE
+  name           String
+  priceUsd       Float
+  billingPeriod  String         // e.g., 30d, 365d
+  dailySignalLimit Int          @default(5)
+  isActive       Boolean        @default(true)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  subscriptions  Subscription[]
+  payments       Payment[]
+
+  @@map("plans")
+}
+
+model Subscription {
+  id             String             @id @default(uuid())
+  userId         String
+  user           User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  planId         String
+  plan           Plan               @relation(fields: [planId], references: [id])
+  status         SubscriptionStatus @default(FREE)
+  startDate      DateTime           @default(now())
+  endDate        DateTime
+  paymentId      String?            @unique
+  payment        Payment?           @relation(fields: [paymentId], references: [id])
+  provider       String             @default("CRYPTOMUS")
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  @@map("subscriptions")
+}
+
+model Payment {
+  id             String      @id @default(uuid())
+  userId         String
+  user           User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  planId         String
+  plan           Plan        @relation(fields: [planId], references: [id])
+  merchantId     String
+  orderId        String      @unique
+  invoiceId      String?     @unique
+  amount         Float
+  currency       String      @default("USD")
+  payCurrency    String?
+  status         String      @default("pending") // pending, paid, failed, expired
+  rawPayload     Json?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  subscription   Subscription?
+
+  @@map("payments")
+}
+
+model MarketSymbol {
+  id             String         @id @default(uuid())
+  symbol         String         @unique // e.g., EURUSD, XAUUSD, BTCUSD
+  name           String
+  category       MarketCategory
+  pipSize        Float
+  digits         Int            @default(5)
+  minLot         Float          @default(0.01)
+  maxLot         Float          @default(100.0)
+  isSupported    Boolean        @default(true)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  candles          MarketCandle[]
+  signals          Signal[]
+  marketStatistics MarketStatistic[]
+  watchlists       Watchlist[]
+
+  @@map("market_symbols")
+}
+
+model MarketCandle {
+  id             String       @id @default(uuid())
+  symbolId       String
+  marketSymbol   MarketSymbol @relation(fields: [symbolId], references: [id], onDelete: Cascade)
+  timeframe      String       // M1, M5, M15, M30, H1, H4, D1
+  open           Float
+  high           Float
+  low            Float
+  close          Float
+  volume         Float        @default(0)
+  timestamp      DateTime
+  createdAt      DateTime     @default(now())
+
+  @@unique([symbolId, timeframe, timestamp])
+  @@index([symbolId, timeframe, timestamp])
+  @@map("market_candles")
+}
+
+model MarketSession {
+  id             String   @id @default(uuid())
+  sessionName    String   // Asian, London, New York, London/New York Overlap
+  utcOpenHour    Int
+  utcCloseHour   Int
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("market_sessions")
+}
+
+model Strategy {
+  id             String   @id @default(uuid())
+  code           String   @unique // e.g. SMC, ALCHEMIST, TREND, BREAKOUT, REVERSAL, SD, MARTINGALE, GRID, HEDGING
+  name           String
+  description    String
+  isEnabled      Boolean  @default(true)
+  requiresPremium Boolean @default(false)
+  config         Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  userStrategies UserStrategy[]
+  signals        Signal[]
+  statistics     StrategyStatistic[]
+
+  @@map("strategies")
+}
+
+model UserStrategy {
+  id             String   @id @default(uuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  strategyId     String
+  strategy       Strategy @relation(fields: [strategyId], references: [id], onDelete: Cascade)
+  isSelected     Boolean  @default(true)
+  customConfig   Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([userId, strategyId])
+  @@map("user_strategies")
+}
+
+model Signal {
+  id             String          @id @default(uuid())
+  fingerprint    String          @unique
+  symbolId       String
+  marketSymbol   MarketSymbol    @relation(fields: [symbolId], references: [id])
+  strategyId     String
+  strategy       Strategy        @relation(fields: [strategyId], references: [id])
+  timeframe      String
+  direction      SignalDirection
+  confidence     Float
+  qualityScore   Int
+  entryMin       Float
+  entryMax       Float
+  stopLoss       Float
+  tp1            Float
+  tp2            Float
+  tp3            Float
+  riskReward     String
+  reasoning      Json            // Bullet points of reasoning
+  supporting     Json            // Array of supporting factors
+  opposing       Json            // Array of opposing factors
+  marketRegime   String
+  session        String
+  status         SignalStatus    @default(GENERATED)
+  sentAt         DateTime?
+  closedAt       DateTime?
+  result         String?         // WIN, LOSS, BREAKEVEN, EXPIRED
+  pipsGained     Float?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  events         SignalEvent[]
+  levels         SignalLevel[]
+  monitoring     SignalMonitoring?
+
+  @@map("signals")
+}
+
+model SignalEvent {
+  id             String      @id @default(uuid())
+  signalId       String
+  signal         Signal      @relation(fields: [signalId], references: [id], onDelete: Cascade)
+  eventType      SignalStatus
+  price          Float
+  metadata       Json?
+  timestamp      DateTime    @default(now())
+
+  @@map("signal_events")
+}
+
+model SignalLevel {
+  id             String   @id @default(uuid())
+  signalId       String
+  signal         Signal   @relation(fields: [signalId], references: [id], onDelete: Cascade)
+  levelType      String   // ENTRY, SL, TP1, TP2, TP3, BREAKEVEN
+  price          Float
+  isHit          Boolean  @default(false)
+  hitAt          DateTime?
+
+  @@map("signal_levels")
+}
+
+model SignalMonitoring {
+  id             String   @id @default(uuid())
+  signalId       String   @unique
+  signal         Signal   @relation(fields: [signalId], references: [id], onDelete: Cascade)
+  currentPrice   Float
+  highestPrice   Float
+  lowestPrice    Float
+  isSlMovedBe    Boolean  @default(false)
+  isPartialClosed Boolean @default(false)
+  lastCheckedAt  DateTime @default(now())
+
+  @@map("signal_monitoring")
+}
+
+model SignalStatistic {
+  id             String   @id @default(uuid())
+  totalSignals   Int      @default(0)
+  totalWins      Int      @default(0)
+  totalLosses    Int      @default(0)
+  winRate        Float    @default(0.0)
+  avgRiskReward  Float    @default(0.0)
+  period         String   // TODAY, 7D, 30D, 90D, ALL_TIME
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("signal_statistics")
+}
+
+model StrategyStatistic {
+  id             String   @id @default(uuid())
+  strategyId     String
+  strategy       Strategy @relation(fields: [strategyId], references: [id], onDelete: Cascade)
+  totalSignals   Int      @default(0)
+  wins           Int      @default(0)
+  losses         Int      @default(0)
+  winRate        Float    @default(0.0)
+  avgR           Float    @default(0.0)
+  profitFactor   Float    @default(0.0)
+  maxDrawdown    Float    @default(0.0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("strategy_statistics")
+}
+
+model MarketStatistic {
+  id             String       @id @default(uuid())
+  symbolId       String
+  marketSymbol   MarketSymbol @relation(fields: [symbolId], references: [id], onDelete: Cascade)
+  totalSignals   Int          @default(0)
+  wins           Int          @default(0)
+  losses         Int          @default(0)
+  winRate        Float        @default(0.0)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@map("market_statistics")
+}
+
+model NewsEvent {
+  id             String   @id @default(uuid())
+  currency       String   // USD, EUR, GBP, JPY, etc.
+  title          String
+  impact         String   // HIGH, MEDIUM, LOW
+  scheduledAt    DateTime
+  actual         String?
+  forecast       String?
+  previous       String?
+  createdAt      DateTime @default(now())
+
+  @@map("news_events")
+}
+
+model UserPreference {
+  id             String   @id @default(uuid())
+  userId         String   @unique
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  language       String   @default("en")
+  timezone       String   @default("UTC")
+  newsFilterOn   Boolean  @default(true)
+  alertNewSignal Boolean  @default(true)
+  alertTp1       Boolean  @default(true)
+  alertTp2       Boolean  @default(true)
+  alertTp3       Boolean  @default(true)
+  alertBreakeven Boolean  @default(true)
+  alertSl        Boolean  @default(true)
+  alertReentry   Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("user_preferences")
+}
+
+model Watchlist {
+  id             String       @id @default(uuid())
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  symbolId       String
+  marketSymbol   MarketSymbol @relation(fields: [symbolId], references: [id], onDelete: Cascade)
+  createdAt      DateTime     @default(now())
+
+  @@unique([userId, symbolId])
+  @@map("watchlists")
+}
+
+model AuditLog {
+  id             String   @id @default(uuid())
+  userId         String?
+  user           User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action         String
+  details        Json?
+  ipAddress      String?
+  timestamp      DateTime @default(now())
+
+  @@map("audit_logs")
+}
+
+model SystemSetting {
+  id             String   @id @default(uuid())
+  key            String   @unique
+  value          Json
+  description    String?
+  updatedAt      DateTime @updatedAt
+
+  @@map("system_settings")
+}
+
+model AdminRoleModel {
+  id             String    @id @default(uuid())
+  adminUserId    String
+  adminUser      AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+  role           AdminRole
+  createdAt      DateTime  @default(now())
+
+  @@unique([adminUserId, role])
+  @@map("admin_roles")
+}
+
+model AdminUser {
+  id             String           @id @default(uuid())
+  username       String           @unique
+  email          String           @unique
+  passwordHash   String
+  twoFactorSecret String?
+  isTwoFactorEnabled Boolean      @default(false)
+  isActive       Boolean          @default(true)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  roles          AdminRoleModel[]
+
+  @@map("admin_users")
+}
+
+model ProviderHealth {
+  id             String   @id @default(uuid())
+  providerName   String   @unique // TWELVE_DATA, CRYPTO, FOREX, CRYPTOMUS, TELEGRAM
+  isHealthy      Boolean  @default(true)
+  latencyMs      Int      @default(0)
+  lastSuccess    DateTime @default(now())
+  lastError      String?
+  updatedAt      DateTime @updatedAt
+
+  @@map("provider_health")
+}
+
+model Notification {
+  id             String   @id @default(uuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title          String
+  body           String
+  isRead         Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  @@map("notifications")
+}

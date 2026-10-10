@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: hikima_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: hikima
+      POSTGRES_PASSWORD: hikima_secure_pass
+      POSTGRES_DB: hikimax10
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: hikima_redis
+    restart: always
+    ports:
+      - "6379:6379"
+
+  app:
+    build: .
+    container_name: hikima_app
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://hikima:hikima_secure_pass@postgres:5432/hikimax10?schema=public
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - postgres
+      - redis
+
+volumes:
+  postgres_data:
