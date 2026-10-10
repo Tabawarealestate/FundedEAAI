@@ -92,7 +92,7 @@ export async function seedInitialData() {
 
   // 5. Seed System Settings
   const defaultSettings = [
-    { key: 'FREE_ACCESS_CODE', value: { code: 'X10', trialDays: 30 }, description: 'Default registration code and trial length' },
+    { key: 'FREE_ACCESS_CODE', value: { code: 'X10H', trialDays: 30 }, description: 'Default registration code and trial length' },
     { key: 'RISK_LIMITS', value: { maxDailySignals: 5, maxConsecutiveMartingale: 3, defaultRiskReward: 2.0 }, description: 'Central safety thresholds' },
   ];
 

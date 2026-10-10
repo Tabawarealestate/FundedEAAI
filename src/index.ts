@@ -28,7 +28,7 @@ async function bootstrap() {
 
   // 3. Launch Telegram Bot Service
   let botService: TelegramBotService | null = null;
-  if (config.TELEGRAM_BOT_TOKEN && !config.TELEGRAM_BOT_TOKEN.includes('ExampleToken')) {
+  if (config.TELEGRAM_BOT_TOKEN) {
     try {
       botService = new TelegramBotService(config.TELEGRAM_BOT_TOKEN);
       botService.bot.launch().then(() => {
@@ -48,10 +48,9 @@ async function bootstrap() {
       for (const ev of events) {
         console.log(`[MONITOR] ${ev.symbol} -> ${ev.newStatus}: ${ev.message}`);
         if (botService) {
-          // Notify registered users
           const tgUsers = await prisma.telegramUser.findMany();
           for (const u of tgUsers) {
-            botService.bot.telegram.sendMessage(Number(u.telegramId), ev.message).catch(() => {});
+            botService.bot.telegram.sendMessage(String(u.telegramId), ev.message).catch(() => {});
           }
         }
       }
@@ -143,18 +142,54 @@ async function bootstrap() {
 
         console.log(`🔥 [SIGNAL GENERATED] ${sym.symbol} ${consensus.finalDirection} (${consensus.consensusScore}/100) Strategy: ${dbStrategy.name}`);
 
-        // Dispatch Signal to All Active Registered Telegram Users respecting daily quotas
+        // Dispatch Signal to Active Telegram Users
         if (botService) {
           const activeUsers = await prisma.telegramUser.findMany({
             include: { user: true },
           });
 
+          const now = new Date();
+
           for (const tu of activeUsers) {
+            let currentDailyCount = tu.dailySignalCount;
+
+            // Reset daily count if last signal was from a previous UTC calendar day
+            if (tu.lastSignalDate) {
+              const lastDateStr = new Date(tu.lastSignalDate).toISOString().split('T')[0];
+              const nowDateStr = now.toISOString().split('T')[0];
+              if (lastDateStr !== nowDateStr) {
+                currentDailyCount = 0;
+                await prisma.telegramUser.update({
+                  where: { id: tu.id },
+                  data: { dailySignalCount: 0 },
+                });
+              }
+            }
+
             const isPremium = tu.user.accessType === 'PREMIUM';
+            const trialExpired = tu.user.accessType === 'FREE' && tu.user.trialEndDate && now > new Date(tu.user.trialEndDate);
+
+            if (trialExpired) {
+              botService.bot.telegram.sendMessage(
+                String(tu.telegramId),
+                `⏳ Your Hikima X10 AI 30-day free trial has expired.\n\nFree signals have stopped. Premium subscription is required to continue receiving signals.\n\nType /subscribe or click below:`,
+                {
+                  reply_markup: {
+                    inline_keyboard: [
+                      [{ text: 'Monthly Plan ($15/mo)', callback_data: 'buy_MONTHLY' }],
+                      [{ text: 'Yearly Plan ($500/yr)', callback_data: 'buy_YEARLY' }],
+                      [{ text: 'Elite Plan ($1,000/yr)', callback_data: 'buy_ELITE' }],
+                    ]
+                  }
+                }
+              ).catch(() => {});
+              continue;
+            }
+
             const quota = isPremium ? 5 : 1;
 
-            if (tu.dailySignalCount < quota) {
-              const sent = await botService.sendFormattedSignal(Number(tu.telegramId), {
+            if (currentDailyCount < quota) {
+              const sent = await botService.sendFormattedSignal(String(tu.telegramId), {
                 ...newSignal,
                 marketSymbol: sym,
                 strategyName: dbStrategy.name,
@@ -165,7 +200,7 @@ async function bootstrap() {
                   where: { id: tu.id },
                   data: {
                     dailySignalCount: { increment: 1 },
-                    lastSignalDate: new Date(),
+                    lastSignalDate: now,
                   },
                 });
               }

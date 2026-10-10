@@ -27,18 +27,70 @@ export class TelegramBotService {
         const tgUser = ctx.from;
         const username = tgUser.username ? `@${tgUser.username}` : tgUser.first_name || 'Trader';
 
-        let dbTgUser = await prisma.telegramUser.findUnique({
+        const dbTgUser = await prisma.telegramUser.findUnique({
           where: { telegramId: BigInt(tgUser.id) },
           include: { user: { include: { subscriptions: true } } },
         });
 
         if (!dbTgUser) {
+          // Prompt new user for FREE ACCESS CODE (X10H)
+          return ctx.reply(
+            `Welcome ${username} 👋\n\nTo activate your 30-day access, please enter your FREE ACCESS CODE below:\n\n🔑 Code: X10H`
+          );
+        }
+
+        // Check if free trial has expired
+        if (dbTgUser.user.accessType === 'FREE' && dbTgUser.user.trialEndDate && new Date() > new Date(dbTgUser.user.trialEndDate)) {
+          return this.sendExpirationNotice(ctx);
+        }
+
+        const accessLabel = dbTgUser.user.accessType === 'PREMIUM' ? '💎 PREMIUM' : 'FREE (Active)';
+
+        const welcomeText = `Welcome ${username} 👋\n\nYou are now connected to Hikima X10 AI.\n\n24/7 multi-market analysis.\nReal-time market intelligence.\nMulti-strategy signals.\nAutomatic signal monitoring.\n\nAccess: ${accessLabel}\n\nChoose an option below.`;
+
+        const keyboard = Markup.inlineKeyboard([
+          [Markup.button.callback('📊 Signals', 'menu_signals'), Markup.button.callback('📈 Markets', 'menu_markets')],
+          [Markup.button.callback('🧠 Strategies', 'menu_strategies'), Markup.button.callback('💎 Premium', 'menu_subscribe')],
+          [Markup.button.callback('📊 Performance', 'menu_performance'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
+          [Markup.button.callback('❓ Help & Support', 'menu_help')],
+        ]);
+
+        await ctx.reply(welcomeText, keyboard);
+      } catch (err) {
+        console.error('Error in /start handler:', err);
+        await ctx.reply('Welcome to Hikima X10 AI! Type X10H to activate free access.');
+      }
+    });
+
+    // 2. Text Message Handler for FREE ACCESS CODE Validation (X10H)
+    this.bot.on('text', async (ctx, next) => {
+      if (ctx.message.text.startsWith('/')) {
+        return next();
+      }
+
+      const inputCode = ctx.message.text.trim().toUpperCase();
+      const tgUser = ctx.from;
+      const username = tgUser.username ? `@${tgUser.username}` : tgUser.first_name || 'Trader';
+
+      let dbTgUser = await prisma.telegramUser.findUnique({
+        where: { telegramId: BigInt(tgUser.id) },
+        include: { user: true },
+      });
+
+      if (!dbTgUser) {
+        // Validate Server-Side Free Access Code
+        const validCode = config.DEFAULT_FREE_ACCESS_CODE || 'X10H';
+
+        if (inputCode === validCode || inputCode === 'X10H' || inputCode === 'X10') {
+          const trialStart = new Date();
+          const trialEnd = new Date(trialStart.getTime() + 30 * 24 * 3600 * 1000); // 30 days trial
+
           const newUser = await prisma.user.create({
             data: {
               accessType: 'FREE',
-              freeCodeUsed: 'X10',
-              trialStartDate: new Date(),
-              trialEndDate: new Date(Date.now() + 30 * 24 * 3600 * 1000), // 30 days
+              freeCodeUsed: 'X10H',
+              trialStartDate: trialStart,
+              trialEndDate: trialEnd,
               preferences: {
                 create: {
                   language: tgUser.language_code || 'en',
@@ -56,29 +108,28 @@ export class TelegramBotService {
               lastName: tgUser.last_name || null,
               chatId: BigInt(ctx.chat.id),
             },
-            include: { user: { include: { subscriptions: true } } },
+            include: { user: true },
           });
+
+          const welcomeText = `✅ FREE ACCESS CODE VALIDATED!\n\nWelcome ${username} 👋\n\nYou are now connected to Hikima X10 AI.\n\n24/7 multi-market analysis.\nReal-time market intelligence.\nMulti-strategy signals.\nAutomatic signal monitoring.\n\nAccess: FREE (30 Days Active)\n\nChoose an option below.`;
+
+          const keyboard = Markup.inlineKeyboard([
+            [Markup.button.callback('📊 Signals', 'menu_signals'), Markup.button.callback('📈 Markets', 'menu_markets')],
+            [Markup.button.callback('🧠 Strategies', 'menu_strategies'), Markup.button.callback('💎 Premium', 'menu_subscribe')],
+            [Markup.button.callback('📊 Performance', 'menu_performance'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
+            [Markup.button.callback('❓ Help & Support', 'menu_help')],
+          ]);
+
+          return ctx.reply(welcomeText, keyboard);
+        } else {
+          return ctx.reply(`❌ Invalid Access Code.\n\nPlease enter the correct free access code to unlock your 30-day trial:\n\n🔑 Required Code: X10H`);
         }
-
-        const accessLabel = dbTgUser.user.accessType === 'PREMIUM' ? '💎 PREMIUM' : 'FREE';
-
-        const welcomeText = `Welcome ${username} 👋\n\nYou are now connected to Hikima X10 AI.\n\n24/7 multi-market analysis.\nReal-time market intelligence.\nMulti-strategy signals.\nAutomatic signal monitoring.\n\nAccess: ${accessLabel}\n\nChoose an option below.`;
-
-        const keyboard = Markup.inlineKeyboard([
-          [Markup.button.callback('📊 Signals', 'menu_signals'), Markup.button.callback('📈 Markets', 'menu_markets')],
-          [Markup.button.callback('🧠 Strategies', 'menu_strategies'), Markup.button.callback('💎 Premium', 'menu_subscribe')],
-          [Markup.button.callback('📊 Performance', 'menu_performance'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
-          [Markup.button.callback('❓ Help & Support', 'menu_help')],
-        ]);
-
-        await ctx.reply(welcomeText, keyboard);
-      } catch (err) {
-        console.error('Error in /start handler:', err);
-        await ctx.reply('Welcome to Hikima X10 AI! Please select an option from the menu.');
       }
+
+      return next();
     });
 
-    // 2. Commands
+    // 3. Commands
     this.bot.command(['menu', 'signals', 'markets', 'strategies', 'settings', 'performance', 'subscription', 'subscribe', 'help', 'support', 'status', 'stop'], async (ctx) => {
       const command = ctx.message.text.split(' ')[0].replace('/', '');
 
@@ -102,7 +153,7 @@ export class TelegramBotService {
       if (command === 'stop') return ctx.reply('⏹ Notifications stopped. Type /start to resume.');
     });
 
-    // 3. Callback Actions for Main Menu
+    // 4. Callback Actions for Main Menu
     this.bot.action('menu_signals', async (ctx) => {
       await ctx.answerCbQuery();
       await this.renderSignals(ctx);
@@ -132,7 +183,7 @@ export class TelegramBotService {
       await this.renderHelp(ctx);
     });
 
-    // 4. CryptoMus Payment Invoice Callbacks (buy_MONTHLY, buy_YEARLY, buy_ELITE)
+    // 5. CryptoMus Payment Invoice Callbacks (buy_MONTHLY, buy_YEARLY, buy_ELITE)
     this.bot.action(/^buy_(MONTHLY|YEARLY|ELITE)$/, async (ctx) => {
       await ctx.answerCbQuery();
       const planCode = ctx.match[1];
@@ -143,7 +194,7 @@ export class TelegramBotService {
         include: { user: true },
       });
 
-      if (!dbUser) return ctx.reply('Please register first by typing /start.');
+      if (!dbUser) return ctx.reply('Please register first by typing /start and entering code X10H.');
 
       const plan = await prisma.plan.findUnique({ where: { code: planCode } });
       if (!plan) return ctx.reply('Selected plan is currently unavailable.');
@@ -178,14 +229,14 @@ export class TelegramBotService {
       );
     });
 
-    // 5. Strategy Selection Action
+    // 6. Strategy Selection Action
     this.bot.action(/^select_strat_(.+)$/, async (ctx) => {
       const stratCode = ctx.match[1];
       await ctx.answerCbQuery(`Selected Strategy: ${stratCode}`);
       await ctx.reply(`✅ Preferred Strategy updated to: ${stratCode}. Saved to your profile.`);
     });
 
-    // 6. Admin Commands
+    // 7. Admin Commands
     this.bot.command(['admin', 'adminstats', 'users', 'broadcast', 'system'], async (ctx) => {
       if (String(ctx.from.id) !== config.TELEGRAM_ADMIN_CHAT_ID) {
         return ctx.reply('Unauthorized: Admin access required.');
@@ -225,6 +276,16 @@ export class TelegramBotService {
   }
 
   // --- Render Helpers ---
+  private async sendExpirationNotice(ctx: any) {
+    const text = `⏳ Your Hikima X10 AI free access has expired.\n\nYour free access lasted 30 days.\n\nPremium access is required to continue receiving signals.\n\nPremium includes:\n• Multiple strategies\n• 3–5 High-Quality Daily Signals\n• Strategy selection\n• Re-entry alerts\n• Advanced monitoring\n• Full market coverage\n\nChoose a subscription plan below:`;
+    const keyboard = Markup.inlineKeyboard([
+      [Markup.button.callback('Monthly Plan ($15/mo)', 'buy_MONTHLY')],
+      [Markup.button.callback('Yearly Plan ($500/yr)', 'buy_YEARLY')],
+      [Markup.button.callback('Elite Plan ($1,000/yr)', 'buy_ELITE')],
+    ]);
+    await ctx.reply(text, keyboard);
+  }
+
   private async renderSignals(ctx: any) {
     const activeSignals = await prisma.signal.findMany({
       where: { status: { in: ['SENT', 'ACTIVE', 'ENTRY_REACHED'] } },
@@ -289,7 +350,7 @@ export class TelegramBotService {
   }
 
   private async renderHelp(ctx: any) {
-    await ctx.reply(`❓ HELP & SUPPORT:\n\nHikima X10 AI operates 24/7 scanning global markets using real market feeds and deterministic strategy engines.\n\nSupport Contact: @HikimaSupport\nDocumentation: https://hikimax10.ai/docs`);
+    await ctx.reply(`❓ HELP & SUPPORT:\n\nHikima X10 AI operates 24/7 scanning global markets using real market feeds and deterministic strategy engines.\n\nOfficial Support Contact: @Hikimawebdev\nDocumentation: https://hikimax10.ai/docs`);
   }
 
   private async renderStatus(ctx: any) {
@@ -299,7 +360,7 @@ export class TelegramBotService {
       include: { user: true },
     });
 
-    if (!dbUser) return ctx.reply('Please register first by typing /start.');
+    if (!dbUser) return ctx.reply('Please register first by typing /start and entering code X10H.');
 
     const isPremium = dbUser.user.accessType === 'PREMIUM';
     const statusText = `🔥 HIKIMA X10 AI STATUS\n\nUser: ${tgUser.username ? '@' + tgUser.username : tgUser.first_name}\nAccess: ${isPremium ? '💎 PREMIUM' : 'FREE'}\nDaily Signals Used: ${dbUser.dailySignalCount} / ${isPremium ? 5 : 1}\nTrial End Date: ${dbUser.user.trialEndDate ? dbUser.user.trialEndDate.toISOString().split('T')[0] : 'N/A'}`;
