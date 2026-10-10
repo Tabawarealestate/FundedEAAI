@@ -37,8 +37,8 @@ export class TelegramBotService {
       if (String(userId) === config.TELEGRAM_ADMIN_CHAT_ID) return true;
       const member = await this.bot.telegram.getChatMember(this.channelUsername, userId);
       return ['creator', 'administrator', 'member'].includes(member.status);
-    } catch (err) {
-      console.error(`Warning: getChatMember check for ${userId} in ${this.channelUsername} failed:`, err);
+    } catch (err: any) {
+      console.error(`Warning: getChatMember check for ${userId} in ${this.channelUsername} failed:`, err.message || err);
       return true; // Safe fallback if channel lookup fails
     }
   }
@@ -47,12 +47,15 @@ export class TelegramBotService {
     // 1. /start command
     this.bot.start(async (ctx) => {
       try {
+        console.log('>>> EXECUTING /start HANDLER FOR:', ctx.from);
         const tgUser = ctx.from;
         const username = tgUser.username ? `@${tgUser.username}` : tgUser.first_name || 'Trader';
         const payload = ctx.startPayload ? ctx.startPayload.trim().toUpperCase() : '';
 
         // Verify Channel Membership
         const isMember = await this.checkChannelMembership(tgUser.id);
+        console.log(`>>> CHANNEL MEMBERSHIP FOR ${tgUser.id}:`, isMember);
+
         if (!isMember) {
           return this.renderChannelRequiredScreen(ctx, username);
         }
@@ -83,7 +86,9 @@ To activate your 30-day access and receive real-time signals, please reply with 
 👉 Please type: X10H
 
 ━━━━━━━━━━━━━━━━━━`;
-          return ctx.reply(codePromptNote);
+          const replyRes = await ctx.reply(codePromptNote);
+          console.log('>>> REPLIED CODE PROMPT NOTE SUCCESS:', replyRes.message_id);
+          return;
         }
 
         if (dbTgUser.user.accessType === 'FREE' && dbTgUser.user.trialEndDate && new Date() > new Date(dbTgUser.user.trialEndDate)) {
@@ -101,9 +106,10 @@ To activate your 30-day access and receive real-time signals, please reply with 
           [Markup.button.callback('⚙️ User Settings', 'menu_settings'), Markup.button.callback('❓ Help & Support', 'menu_help')],
         ]);
 
-        await ctx.reply(welcomeText, keyboard);
+        const replyRes = await ctx.reply(welcomeText, keyboard);
+        console.log('>>> REPLIED WELCOME TEXT SUCCESS:', replyRes.message_id);
       } catch (err) {
-        console.error('Error in /start handler:', err);
+        console.error('CRITICAL ERROR in /start handler:', err);
         await ctx.reply('Welcome to Hikima X10 AI! Please reply with code X10H to activate free access.');
       }
     });
@@ -131,6 +137,8 @@ To activate your 30-day access and receive real-time signals, please reply with 
 
       const tgUser = ctx.from;
       const username = tgUser.username ? `@${tgUser.username}` : tgUser.first_name || 'Trader';
+
+      console.log('>>> TEXT MESSAGE RECEIVED FROM:', username, '->', ctx.message.text);
 
       // Enforce Channel Membership
       const isMember = await this.checkChannelMembership(tgUser.id);
