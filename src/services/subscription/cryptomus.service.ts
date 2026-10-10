@@ -21,7 +21,13 @@ export class CryptoMusService {
   }
 
   generateSignature(data: any): string {
-    const jsonStr = JSON.stringify(data);
+    // Sort keys alphabetically for deterministic JSON representation
+    const sortedData: Record<string, any> = {};
+    Object.keys(data).sort().forEach((key) => {
+      sortedData[key] = data[key];
+    });
+
+    const jsonStr = JSON.stringify(sortedData);
     const base64Str = Buffer.from(jsonStr).toString('base64');
     return crypto.createHash('md5').update(base64Str + this.apiKey).digest('hex');
   }

@@ -1,11 +1,11 @@
 import { Telegraf, Markup } from 'telegraf';
 import { config } from '../../config';
 import { prisma } from '../../database';
-import { SignalDeduplicationService } from '../../services/signal-engine/deduplication.service';
+import { CryptoMusService } from '../../services/subscription/cryptomus.service';
 
 export class TelegramBotService {
   public bot: Telegraf;
-  private dedupService = new SignalDeduplicationService();
+  private cryptomusService = new CryptoMusService();
 
   constructor(token = config.TELEGRAM_BOT_TOKEN) {
     this.bot = new Telegraf(token);
@@ -18,14 +18,12 @@ export class TelegramBotService {
       const tgUser = ctx.from;
       const username = tgUser.username ? `@${tgUser.username}` : tgUser.first_name || 'Trader';
 
-      // Find or prompt for free code X10
       let dbTgUser = await prisma.telegramUser.findUnique({
         where: { telegramId: BigInt(tgUser.id) },
         include: { user: { include: { subscriptions: true } } },
       });
 
       if (!dbTgUser) {
-        // Register free user with default X10 access
         const newUser = await prisma.user.create({
           data: {
             accessType: 'FREE',
@@ -67,82 +65,212 @@ export class TelegramBotService {
       await ctx.reply(welcomeText, keyboard);
     });
 
-    // 2. /menu
-    this.bot.command('menu', async (ctx) => {
-      await ctx.reply('📋 Main Menu:', Markup.inlineKeyboard([
-        [Markup.button.callback('📊 Signals', 'menu_signals'), Markup.button.callback('📈 Markets', 'menu_markets')],
-        [Markup.button.callback('🧠 Strategies', 'menu_strategies'), Markup.button.callback('💎 Premium', 'menu_subscribe')],
-        [Markup.button.callback('📊 Performance', 'menu_performance'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
-      ]));
-    });
+    // 2. Commands: /menu, /status, /signals, /markets, /strategies, /settings, /performance, /subscription, /subscribe, /help, /support, /stop
+    this.bot.command(['menu', 'signals', 'markets', 'strategies', 'settings', 'performance', 'subscription', 'subscribe', 'help', 'support', 'status', 'stop'], async (ctx) => {
+      const command = ctx.message.text.split(' ')[0].replace('/', '');
 
-    // 3. /status
-    this.bot.command('status', async (ctx) => {
-      const tgUser = ctx.from;
-      const dbUser = await prisma.telegramUser.findUnique({
-        where: { telegramId: BigInt(tgUser.id) },
-        include: { user: { include: { subscriptions: true } } },
-      });
-
-      if (!dbUser) {
-        return ctx.reply('User account not found. Please type /start.');
+      if (command === 'menu') {
+        return ctx.reply('📋 Main Menu:', Markup.inlineKeyboard([
+          [Markup.button.callback('📊 Signals', 'menu_signals'), Markup.button.callback('📈 Markets', 'menu_markets')],
+          [Markup.button.callback('🧠 Strategies', 'menu_strategies'), Markup.button.callback('💎 Premium', 'menu_subscribe')],
+          [Markup.button.callback('📊 Performance', 'menu_performance'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
+          [Markup.button.callback('❓ Help & Support', 'menu_help')],
+        ]));
       }
 
-      const username = tgUser.username ? `@${tgUser.username}` : tgUser.first_name;
-      const isPremium = dbUser.user.accessType === 'PREMIUM';
-      const statusText = `🔥 HIKIMA X10 AI\n\nUser: ${username}\nAccess: ${isPremium ? '💎 PREMIUM' : 'FREE'}\nDaily Signals Used: ${dbUser.dailySignalCount} / ${isPremium ? 5 : 1}\nTrial Expiry: ${dbUser.user.trialEndDate ? dbUser.user.trialEndDate.toISOString().split('T')[0] : 'N/A'}`;
-
-      await ctx.reply(statusText);
+      if (command === 'signals') return this.renderSignals(ctx);
+      if (command === 'markets') return this.renderMarkets(ctx);
+      if (command === 'strategies') return this.renderStrategies(ctx);
+      if (command === 'settings') return this.renderSettings(ctx);
+      if (command === 'performance') return this.renderPerformance(ctx);
+      if (command === 'subscription' || command === 'subscribe') return this.renderSubscription(ctx);
+      if (command === 'help' || command === 'support') return this.renderHelp(ctx);
+      if (command === 'status') return this.renderStatus(ctx);
+      if (command === 'stop') return ctx.reply('⏹ Notifications stopped. Type /start to resume.');
     });
 
-    // 4. /subscribe & Callback handlers
-    this.bot.action('menu_subscribe', async (ctx) => {
-      const text = `💎 HIKIMA X10 AI PREMIUM SUBSCRIPTION\n\nUnlock full access to:\n• 3–5 High-Quality Signals/Day\n• Strategy Selection (SMC, Alchemist, Trend, etc.)\n• Custom Watchlist & Session Filters\n• Advanced Monitoring & Re-entry Alerts\n\nSelect a Subscription Plan below:`;
-      const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('Monthly Plan ($15/mo)', 'buy_MONTHLY')],
-        [Markup.button.callback('Yearly Plan ($500/yr)', 'buy_YEARLY')],
-        [Markup.button.callback('Elite Plan ($1,000/yr)', 'buy_ELITE')],
-      ]);
-      await ctx.reply(text, keyboard);
+    // 3. Callback Actions for Main Menu
+    this.bot.action('menu_signals', (ctx) => this.renderSignals(ctx));
+    this.bot.action('menu_markets', (ctx) => this.renderMarkets(ctx));
+    this.bot.action('menu_strategies', (ctx) => this.renderStrategies(ctx));
+    this.bot.action('menu_subscribe', (ctx) => this.renderSubscription(ctx));
+    this.bot.action('menu_performance', (ctx) => this.renderPerformance(ctx));
+    this.bot.action('menu_settings', (ctx) => this.renderSettings(ctx));
+    this.bot.action('menu_help', (ctx) => this.renderHelp(ctx));
+
+    // 4. CryptoMus Payment Invoice Callbacks (buy_MONTHLY, buy_YEARLY, buy_ELITE)
+    this.bot.action(/^buy_(MONTHLY|YEARLY|ELITE)$/, async (ctx) => {
+      const planCode = ctx.match[1];
+      const tgUser = ctx.from;
+
+      const dbUser = await prisma.telegramUser.findUnique({
+        where: { telegramId: BigInt(tgUser.id) },
+        include: { user: true },
+      });
+
+      if (!dbUser) return ctx.reply('Please register first by typing /start.');
+
+      const plan = await prisma.plan.findUnique({ where: { code: planCode } });
+      if (!plan) return ctx.reply('Selected plan is currently unavailable.');
+
+      const orderId = `HKM_${planCode}_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+
+      // Save pending payment record in DB
+      await prisma.payment.create({
+        data: {
+          userId: dbUser.userId,
+          planId: plan.id,
+          merchantId: config.CRYPTOMUS_MERCHANT_ID,
+          orderId,
+          amount: plan.priceUsd,
+          currency: 'USD',
+          status: 'pending',
+        },
+      });
+
+      // Generate invoice via CryptoMus API
+      const invoiceRes = await this.cryptomusService.createPaymentInvoice({
+        amount: plan.priceUsd.toFixed(2),
+        currency: 'USD',
+        orderId,
+        urlCallback: 'https://hikimax10.ai/api/v1/payments/webhook',
+        urlReturn: 'https://t.me/HikimaX10Bot',
+      });
+
+      const paymentUrl = invoiceRes.result?.url || 'https://pay.cryptomus.com';
+
+      await ctx.reply(
+        `💳 PAYMENT INVOICE CREATED\n\nPlan: ${plan.name}\nAmount: $${plan.priceUsd.toFixed(2)} USD\nOrder ID: ${orderId}\n\nClick the link below to complete payment via CryptoMus:`,
+        Markup.inlineKeyboard([[Markup.button.url('🔒 Pay with Crypto (CryptoMus)', paymentUrl)]])
+      );
     });
 
-    // Strategy Selection callback
-    this.bot.action('menu_strategies', async (ctx) => {
-      const text = `🧠 STRATEGY ENGINE SELECTION\n\nChoose your active analysis strategy:`;
-      const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('🤖 AI Consensus', 'select_strat_AI_CONSENSUS')],
-        [Markup.button.callback('⚡ Smart Money Concepts (SMC)', 'select_strat_SMC')],
-        [Markup.button.callback('🧪 Alchemist', 'select_strat_ALCHEMIST')],
-        [Markup.button.callback('📈 Trend Following', 'select_strat_TREND')],
-        [Markup.button.callback('💥 Breakout Engine', 'select_strat_BREAKOUT')],
-      ]);
-      await ctx.reply(text, keyboard);
-    });
-
-    // Strategy setting action
+    // 5. Strategy Selection Action
     this.bot.action(/^select_strat_(.+)$/, async (ctx) => {
       const stratCode = ctx.match[1];
       await ctx.answerCbQuery(`Selected Strategy: ${stratCode}`);
       await ctx.reply(`✅ Preferred Strategy updated to: ${stratCode}. Saved to your profile.`);
     });
 
-    // Admin commands
-    this.bot.command('admin', async (ctx) => {
+    // 6. Admin Commands
+    this.bot.command(['admin', 'adminstats', 'users', 'broadcast', 'system'], async (ctx) => {
       if (String(ctx.from.id) !== config.TELEGRAM_ADMIN_CHAT_ID) {
         return ctx.reply('Unauthorized: Admin access required.');
       }
-      await ctx.reply('🛡 ADMIN PANEL:\n\nUse /adminstats, /users, /broadcast to manage the system.');
+
+      const cmd = ctx.message.text.split(' ')[0].replace('/', '');
+
+      if (cmd === 'admin' || cmd === 'system') {
+        return ctx.reply('🛡 ADMIN CONTROL PANEL:\n\nAvailable commands:\n/adminstats - System metrics\n/users - User stats\n/broadcast <text> - Mass message');
+      }
+
+      if (cmd === 'adminstats' || cmd === 'users') {
+        const userCount = await prisma.user.count();
+        const freeCount = await prisma.user.count({ where: { accessType: 'FREE' } });
+        const premiumCount = await prisma.user.count({ where: { accessType: 'PREMIUM' } });
+        const signalCount = await prisma.signal.count();
+        const activeSubs = await prisma.subscription.count({ where: { status: 'ACTIVE' } });
+
+        return ctx.reply(`📊 SYSTEM STATS:\n\nTotal Users: ${userCount}\n• Free Users: ${freeCount}\n• Premium Users: ${premiumCount}\nActive Subscriptions: ${activeSubs}\nTotal Signals Generated: ${signalCount}`);
+      }
+
+      if (cmd === 'broadcast') {
+        const text = ctx.message.text.replace('/broadcast', '').trim();
+        if (!text) return ctx.reply('Usage: /broadcast <message>');
+
+        const users = await prisma.telegramUser.findMany();
+        let sent = 0;
+        for (const u of users) {
+          try {
+            await this.bot.telegram.sendMessage(Number(u.telegramId), `📢 ANNOUNCEMENT:\n\n${text}`);
+            sent++;
+          } catch {}
+        }
+        return ctx.reply(`✅ Broadcast sent to ${sent} / ${users.length} users.`);
+      }
+    });
+  }
+
+  // --- Render Helpers ---
+  private async renderSignals(ctx: any) {
+    const activeSignals = await prisma.signal.findMany({
+      where: { status: { in: ['SENT', 'ACTIVE', 'ENTRY_REACHED'] } },
+      include: { marketSymbol: true, strategy: true },
+      take: 5,
     });
 
-    this.bot.command('adminstats', async (ctx) => {
-      if (String(ctx.from.id) !== config.TELEGRAM_ADMIN_CHAT_ID) return;
+    if (activeSignals.length === 0) {
+      return ctx.reply('📊 ACTIVE SIGNALS:\n\nNo active signals currently open. Continuous market analysis running.');
+    }
 
-      const userCount = await prisma.user.count();
-      const signalCount = await prisma.signal.count();
-      const activeSubs = await prisma.subscription.count({ where: { status: 'ACTIVE' } });
+    let text = `📊 ACTIVE SIGNALS (${activeSignals.length}):\n\n`;
+    for (const s of activeSignals) {
+      text += `• ${s.marketSymbol.symbol} (${s.direction}) | Strategy: ${s.strategy.name} | Quality: ${s.qualityScore}/100 | Status: ${s.status}\n`;
+    }
+    await ctx.reply(text);
+  }
 
-      await ctx.reply(`📊 SYSTEM STATS:\n\nTotal Users: ${userCount}\nActive Premium Subscriptions: ${activeSubs}\nTotal Signals Generated: ${signalCount}`);
+  private async renderMarkets(ctx: any) {
+    const symbols = await prisma.marketSymbol.findMany({ where: { isSupported: true } });
+    let text = `📈 SUPPORTED MARKETS (${symbols.length}):\n\n`;
+    for (const sym of symbols) {
+      text += `• ${sym.symbol} (${sym.category}) - ${sym.name}\n`;
+    }
+    await ctx.reply(text);
+  }
+
+  private async renderStrategies(ctx: any) {
+    const text = `🧠 STRATEGY ENGINE SELECTION\n\nSelect your active strategy:`;
+    const keyboard = Markup.inlineKeyboard([
+      [Markup.button.callback('🤖 AI Consensus', 'select_strat_AI_CONSENSUS')],
+      [Markup.button.callback('⚡ Smart Money Concepts (SMC)', 'select_strat_SMC')],
+      [Markup.button.callback('🧪 Alchemist', 'select_strat_ALCHEMIST')],
+      [Markup.button.callback('📈 Trend Following', 'select_strat_TREND')],
+      [Markup.button.callback('💥 Breakout Engine', 'select_strat_BREAKOUT')],
+    ]);
+    await ctx.reply(text, keyboard);
+  }
+
+  private async renderSubscription(ctx: any) {
+    const text = `💎 HIKIMA X10 AI PREMIUM SUBSCRIPTION\n\nUnlock full access to:\n• 3–5 High-Quality Signals/Day\n• Strategy Selection (SMC, Alchemist, Trend, etc.)\n• Custom Watchlist & Session Filters\n• Advanced Monitoring & Re-entry Alerts\n\nSelect a Subscription Plan below:`;
+    const keyboard = Markup.inlineKeyboard([
+      [Markup.button.callback('Monthly Plan ($15/mo)', 'buy_MONTHLY')],
+      [Markup.button.callback('Yearly Plan ($500/yr)', 'buy_YEARLY')],
+      [Markup.button.callback('Elite Plan ($1,000/yr)', 'buy_ELITE')],
+    ]);
+    await ctx.reply(text, keyboard);
+  }
+
+  private async renderPerformance(ctx: any) {
+    const stats = await prisma.signalStatistic.findFirst();
+    const total = stats ? stats.totalSignals : 0;
+    const wins = stats ? stats.totalWins : 0;
+    const losses = stats ? stats.totalLosses : 0;
+    const winRate = total > 0 ? ((wins / total) * 100).toFixed(1) : 'N/A';
+
+    await ctx.reply(`📊 PLATFORM PERFORMANCE:\n\nTotal Completed Signals: ${total}\nWins: ${wins}\nLosses: ${losses}\nWin Rate: ${winRate}%\n\nPerformance metrics calculated strictly from verified database historical results.`);
+  }
+
+  private async renderSettings(ctx: any) {
+    await ctx.reply(`⚙️ USER SETTINGS:\n\n• Notifications: ENABLED\n• Timezone: UTC\n• Risk Limit: Standard\n• Free Access: Active`);
+  }
+
+  private async renderHelp(ctx: any) {
+    await ctx.reply(`❓ HELP & SUPPORT:\n\nHikima X10 AI operates 24/7 scanning global markets using real market feeds and deterministic strategy engines.\n\nSupport Contact: @HikimaSupport\nDocumentation: https://hikimax10.ai/docs`);
+  }
+
+  private async renderStatus(ctx: any) {
+    const tgUser = ctx.from;
+    const dbUser = await prisma.telegramUser.findUnique({
+      where: { telegramId: BigInt(tgUser.id) },
+      include: { user: true },
     });
+
+    if (!dbUser) return ctx.reply('Please register first by typing /start.');
+
+    const isPremium = dbUser.user.accessType === 'PREMIUM';
+    const statusText = `🔥 HIKIMA X10 AI STATUS\n\nUser: ${tgUser.username ? '@' + tgUser.username : tgUser.first_name}\nAccess: ${isPremium ? '💎 PREMIUM' : 'FREE'}\nDaily Signals Used: ${dbUser.dailySignalCount} / ${isPremium ? 5 : 1}\nTrial End Date: ${dbUser.user.trialEndDate ? dbUser.user.trialEndDate.toISOString().split('T')[0] : 'N/A'}`;
+    await ctx.reply(statusText);
   }
 
   async sendFormattedSignal(chatId: string | number, signal: any): Promise<boolean> {

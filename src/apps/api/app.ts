@@ -7,6 +7,7 @@ import { prisma } from '../../database';
 import { PaymentWebhookHandler } from '../../services/subscription/payment-webhook.handler';
 import { BacktestEngine } from '../../services/backtesting/backtest.engine';
 import { SMCStrategy } from '../../services/strategy-engine/smc.strategy';
+import { CompositeMarketDataProvider } from '../../services/market-data';
 
 export const app = express();
 app.use(cors());
@@ -14,6 +15,7 @@ app.use(express.json());
 
 const webhookHandler = new PaymentWebhookHandler();
 const backtestEngine = new BacktestEngine();
+const marketDataProvider = new CompositeMarketDataProvider();
 
 // Auth Middleware for Admin Routes
 function requireAdminRole(roles: string[] = []) {
@@ -127,23 +129,24 @@ app.post('/api/v1/payments/webhook', async (req, res) => {
   res.json(result);
 });
 
-// 5. Historical Backtest Trigger Endpoint
+// 5. Historical Backtest Endpoint (Queries REAL Market Data)
 app.post('/api/v1/backtest', async (req, res) => {
-  const { symbol, timeframe, initialBalance } = req.body;
+  const { symbol = 'EURUSD', timeframe = 'M15', initialBalance = 10000 } = req.body;
 
-  const dummyCandles = Array.from({ length: 150 }, (_, i) => ({
-    timestamp: new Date(Date.now() - (150 - i) * 60000 * 15),
-    open: 2600 + Math.sin(i / 10) * 10 + i * 0.2,
-    high: 2603 + Math.sin(i / 10) * 10 + i * 0.2,
-    low: 2598 + Math.sin(i / 10) * 10 + i * 0.2,
-    close: 2601 + Math.sin(i / 10) * 10 + i * 0.2,
-    volume: 1000,
-  }));
+  // Fetch real candles from provider
+  const realCandles = await marketDataProvider.fetchCandles(symbol, timeframe, 150);
 
-  const report = await backtestEngine.runBacktest(new SMCStrategy(), dummyCandles, {
-    symbol: symbol || 'XAUUSD',
-    timeframe: timeframe || 'M15',
-    initialBalance: initialBalance || 10000,
+  if (realCandles.length < 50) {
+    return res.status(503).json({
+      error: 'DATA UNAVAILABLE',
+      message: `Insufficient real historical market data available for ${symbol} on ${timeframe}. Cannot perform backtest without real market data.`,
+    });
+  }
+
+  const report = await backtestEngine.runBacktest(new SMCStrategy(), realCandles, {
+    symbol,
+    timeframe,
+    initialBalance,
     riskPerTradePercent: 1.0,
     spreadPips: 0.2,
     slippagePips: 0.1,
