@@ -142,10 +142,10 @@ async function bootstrap() {
 
         console.log(`🔥 [SIGNAL GENERATED] ${sym.symbol} ${consensus.finalDirection} (${consensus.consensusScore}/100) Strategy: ${dbStrategy.name}`);
 
-        // Dispatch Signal to Active Telegram Users
+        // Dispatch Signal to Active Telegram Users respecting Custom Watchlist Filters
         if (botService) {
           const activeUsers = await prisma.telegramUser.findMany({
-            include: { user: true },
+            include: { user: { include: { watchlist: true } } },
           });
 
           const now = new Date();
@@ -169,9 +169,16 @@ async function bootstrap() {
             const isPremium = tu.user.accessType === 'PREMIUM';
             const trialExpired = tu.user.accessType === 'FREE' && tu.user.trialEndDate && now > new Date(tu.user.trialEndDate);
 
-            // Skip expired users quietly during background signal scanning
             if (trialExpired) {
               continue;
+            }
+
+            // Custom Market Watchlist Filter for Premium users
+            if (isPremium && tu.user.watchlist && tu.user.watchlist.length > 0) {
+              const userSelectedSymbolIds = new Set(tu.user.watchlist.map((w) => w.symbolId));
+              if (!userSelectedSymbolIds.has(sym.id)) {
+                continue; // Skip symbols not selected in Premium custom watchlist
+              }
             }
 
             const quota = isPremium ? 5 : 1;

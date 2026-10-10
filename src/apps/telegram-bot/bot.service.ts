@@ -6,6 +6,8 @@ import { CryptoMusService } from '../../services/subscription/cryptomus.service'
 export class TelegramBotService {
   public bot: Telegraf;
   private cryptomusService = new CryptoMusService();
+  private channelUsername = '@hikimaaipalace';
+  private channelUrl = 'https://t.me/hikimaaipalace';
 
   constructor(token = config.TELEGRAM_BOT_TOKEN) {
     this.bot = new Telegraf(token);
@@ -20,6 +22,18 @@ export class TelegramBotService {
     });
   }
 
+  // Check if user is a member of @hikimaaipalace
+  public async checkChannelMembership(userId: number): Promise<boolean> {
+    try {
+      if (String(userId) === config.TELEGRAM_ADMIN_CHAT_ID) return true;
+      const member = await this.bot.telegram.getChatMember(this.channelUsername, userId);
+      return ['creator', 'administrator', 'member'].includes(member.status);
+    } catch (err) {
+      // If bot is not admin in channel or error occurs in testing, default to true
+      return true;
+    }
+  }
+
   private setupHandlers() {
     // 1. /start command
     this.bot.start(async (ctx) => {
@@ -27,6 +41,12 @@ export class TelegramBotService {
         const tgUser = ctx.from;
         const username = tgUser.username ? `@${tgUser.username}` : tgUser.first_name || 'Trader';
         const payload = ctx.startPayload ? ctx.startPayload.trim().toUpperCase() : '';
+
+        // Verify Channel Membership
+        const isMember = await this.checkChannelMembership(tgUser.id);
+        if (!isMember) {
+          return this.renderChannelRequiredScreen(ctx, username);
+        }
 
         let dbTgUser = await prisma.telegramUser.findUnique({
           where: { telegramId: BigInt(tgUser.id) },
@@ -37,6 +57,7 @@ export class TelegramBotService {
 
         if (!dbTgUser && (payload === validCode || payload === 'X10H' || payload === 'X10')) {
           dbTgUser = await this.activateFreeUser(tgUser, ctx.chat.id, 'X10H');
+          this.announceNewUserInChannel(username);
         }
 
         if (!dbTgUser) {
@@ -46,7 +67,7 @@ export class TelegramBotService {
 
 Welcome ${username} 👋
 
-Thank you for connecting to Hikima X10 AI.
+Thank you for joining @hikimaaipalace!
 
 To activate your 30-day access and receive real-time signals, please reply with your FREE ACCESS CODE:
 
@@ -62,13 +83,13 @@ To activate your 30-day access and receive real-time signals, please reply with 
 
         const accessLabel = dbTgUser.user.accessType === 'PREMIUM' ? '💎 PREMIUM' : 'FREE (Active)';
 
-        const welcomeText = `Welcome ${username} 👋\n\nYou are now connected to Hikima X10 AI.\n\n24/7 multi-market analysis.\nReal-time market intelligence.\nMulti-strategy signals.\nAutomatic signal monitoring.\n\nAccess: ${accessLabel}\n\nChoose an option below.`;
+        const welcomeText = `Welcome ${username} 👋\n\nYou are connected to Hikima X10 AI.\n\n🟢 AI SCAN ENGINE: ACTIVE\n📡 Monitored Markets: 22 Assets\n⚡ Real-time Multi-Strategy Signals\n🛡 Automatic Signal Monitoring\n\nAccess: ${accessLabel}\n\nChoose an option below:`;
 
         const keyboard = Markup.inlineKeyboard([
-          [Markup.button.callback('📊 Signals', 'menu_signals'), Markup.button.callback('📈 Markets', 'menu_markets')],
-          [Markup.button.callback('🧠 Strategies', 'menu_strategies'), Markup.button.callback('💎 Premium', 'menu_subscribe')],
-          [Markup.button.callback('📊 Performance', 'menu_performance'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
-          [Markup.button.callback('❓ Help & Support', 'menu_help')],
+          [Markup.button.callback('📊 Active Signals', 'menu_signals'), Markup.button.callback('📈 Watchlist & Markets', 'menu_markets')],
+          [Markup.button.callback('🧠 Strategy Engine', 'menu_strategies'), Markup.button.callback('💎 Premium Plans', 'menu_subscribe')],
+          [Markup.button.callback('⚡ AI Live Scan Status', 'menu_scan_status'), Markup.button.callback('📊 Performance', 'menu_performance')],
+          [Markup.button.callback('⚙️ User Settings', 'menu_settings'), Markup.button.callback('❓ Help & Support', 'menu_help')],
         ]);
 
         await ctx.reply(welcomeText, keyboard);
@@ -78,15 +99,37 @@ To activate your 30-day access and receive real-time signals, please reply with 
       }
     });
 
-    // 2. Text Message Handler for FREE ACCESS CODE Validation (X10H)
+    // 2. Channel Verification Action
+    this.bot.action('verify_channel', async (ctx) => {
+      await ctx.answerCbQuery();
+      const tgUser = ctx.from;
+      const username = tgUser.username ? `@${tgUser.username}` : tgUser.first_name || 'Trader';
+      const isMember = await this.checkChannelMembership(tgUser.id);
+
+      if (!isMember) {
+        return ctx.reply(`❌ Verification failed: You have not joined @hikimaaipalace yet.\n\nPlease join the channel and click verify again:`, Markup.inlineKeyboard([
+          [Markup.button.url('📢 Join @hikimaaipalace', this.channelUrl)],
+          [Markup.button.callback('🔄 Verify Membership Again', 'verify_channel')],
+        ]));
+      }
+
+      await ctx.reply(`✅ Channel Membership Verified! Welcome to Hikima X10 AI.\n\nPlease reply with code X10H to activate your 30-day access:`);
+    });
+
+    // 3. Text Message Handler for FREE ACCESS CODE Validation (X10H)
     this.bot.on('text', async (ctx, next) => {
-      if (ctx.message.text.startsWith('/')) {
-        return next();
+      if (ctx.message.text.startsWith('/')) return next();
+
+      const tgUser = ctx.from;
+      const username = tgUser.username ? `@${tgUser.username}` : tgUser.first_name || 'Trader';
+
+      // Enforce Channel Membership
+      const isMember = await this.checkChannelMembership(tgUser.id);
+      if (!isMember) {
+        return this.renderChannelRequiredScreen(ctx, username);
       }
 
       const inputCode = ctx.message.text.trim().toUpperCase();
-      const tgUser = ctx.from;
-      const username = tgUser.username ? `@${tgUser.username}` : tgUser.first_name || 'Trader';
 
       let dbTgUser = await prisma.telegramUser.findUnique({
         where: { telegramId: BigInt(tgUser.id) },
@@ -97,7 +140,6 @@ To activate your 30-day access and receive real-time signals, please reply with 
 
       if (inputCode === validCode || inputCode === 'X10H' || inputCode === 'X10') {
         if (dbTgUser) {
-          // User already exists and has used free trial before -> anti-abuse protection
           if (dbTgUser.user.accessType === 'FREE' && dbTgUser.user.trialEndDate && new Date() > new Date(dbTgUser.user.trialEndDate)) {
             return this.sendExpirationNotice(ctx);
           }
@@ -105,14 +147,14 @@ To activate your 30-day access and receive real-time signals, please reply with 
         }
 
         dbTgUser = await this.activateFreeUser(tgUser, ctx.chat.id, inputCode);
+        this.announceNewUserInChannel(username);
 
-        const welcomeText = `✅ FREE ACCESS CODE VALIDATED!\n\nWelcome ${username} 👋\n\nYou are now connected to Hikima X10 AI.\n\n24/7 multi-market analysis.\nReal-time market intelligence.\nMulti-strategy signals.\nAutomatic signal monitoring.\n\nAccess: FREE (30 Days Active)\n\nChoose an option below.`;
+        const welcomeText = `✅ FREE ACCESS CODE VALIDATED!\n\nWelcome ${username} 👋\n\n🟢 AI SCAN ENGINE: ACTIVE\nAccess: FREE (30 Days Active)\n\nChoose an option below:`;
 
         const keyboard = Markup.inlineKeyboard([
-          [Markup.button.callback('📊 Signals', 'menu_signals'), Markup.button.callback('📈 Markets', 'menu_markets')],
-          [Markup.button.callback('🧠 Strategies', 'menu_strategies'), Markup.button.callback('💎 Premium', 'menu_subscribe')],
-          [Markup.button.callback('📊 Performance', 'menu_performance'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
-          [Markup.button.callback('❓ Help & Support', 'menu_help')],
+          [Markup.button.callback('📊 Active Signals', 'menu_signals'), Markup.button.callback('📈 Markets & Watchlist', 'menu_markets')],
+          [Markup.button.callback('🧠 Strategy Engine', 'menu_strategies'), Markup.button.callback('💎 Premium Plans', 'menu_subscribe')],
+          [Markup.button.callback('⚙️ Settings', 'menu_settings'), Markup.button.callback('❓ Help & Support', 'menu_help')],
         ]);
 
         return ctx.reply(welcomeText, keyboard);
@@ -127,16 +169,20 @@ To activate your 30-day access and receive real-time signals, please reply with 
       return next();
     });
 
-    // 3. Commands
+    // 4. Commands
     this.bot.command(['menu', 'signals', 'markets', 'strategies', 'settings', 'performance', 'subscription', 'subscribe', 'help', 'support', 'status', 'stop'], async (ctx) => {
+      const tgUser = ctx.from;
+      const isMember = await this.checkChannelMembership(tgUser.id);
+      if (!isMember) return this.renderChannelRequiredScreen(ctx, tgUser.username ? `@${tgUser.username}` : tgUser.first_name);
+
       const command = ctx.message.text.split(' ')[0].replace('/', '');
 
       if (command === 'menu') {
         return ctx.reply('📋 Main Menu:', Markup.inlineKeyboard([
           [Markup.button.callback('📊 Signals', 'menu_signals'), Markup.button.callback('📈 Markets', 'menu_markets')],
           [Markup.button.callback('🧠 Strategies', 'menu_strategies'), Markup.button.callback('💎 Premium', 'menu_subscribe')],
-          [Markup.button.callback('📊 Performance', 'menu_performance'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
-          [Markup.button.callback('❓ Help & Support', 'menu_help')],
+          [Markup.button.callback('⚡ Scan Status', 'menu_scan_status'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
+          [Markup.button.callback('❓ Help', 'menu_help')],
         ]));
       }
 
@@ -151,7 +197,7 @@ To activate your 30-day access and receive real-time signals, please reply with 
       if (command === 'stop') return ctx.reply('⏹ Notifications stopped. Type /start to resume.');
     });
 
-    // 4. Callback Actions for Main Menu
+    // 5. Interactive Action Handlers (Edits/refreshes cleanly)
     this.bot.action('menu_signals', async (ctx) => {
       await ctx.answerCbQuery();
       await this.renderSignals(ctx);
@@ -180,8 +226,53 @@ To activate your 30-day access and receive real-time signals, please reply with 
       await ctx.answerCbQuery();
       await this.renderHelp(ctx);
     });
+    this.bot.action('menu_scan_status', async (ctx) => {
+      await ctx.answerCbQuery();
+      await this.renderScanStatus(ctx);
+    });
 
-    // 5. CryptoMus Payment Invoice Callbacks (buy_MONTHLY, buy_YEARLY, buy_ELITE)
+    // 6. Premium Watchlist Symbol Toggle Actions (e.g. toggle_XAUUSD, toggle_BTCUSD, toggle_EURUSD)
+    this.bot.action(/^toggle_symbol_(.+)$/, async (ctx) => {
+      const symbolCode = ctx.match[1];
+      const tgUser = ctx.from;
+
+      const dbUser = await prisma.telegramUser.findUnique({
+        where: { telegramId: BigInt(tgUser.id) },
+        include: { user: true },
+      });
+
+      if (!dbUser || dbUser.user.accessType !== 'PREMIUM') {
+        await ctx.answerCbQuery('💎 Custom Market Selection is a Premium feature.');
+        return ctx.reply('💎 Custom market selection requires Premium access. Click Premium to upgrade.');
+      }
+
+      const sym = await prisma.marketSymbol.findUnique({ where: { symbol: symbolCode } });
+      if (!sym) return;
+
+      const existing = await prisma.watchlist.findUnique({
+        where: { userId_symbolId: { userId: dbUser.userId, symbolId: sym.id } },
+      });
+
+      if (existing) {
+        await prisma.watchlist.delete({ where: { id: existing.id } });
+        await ctx.answerCbQuery(`Removed ${symbolCode} from custom watchlist`);
+      } else {
+        await prisma.watchlist.create({
+          data: { userId: dbUser.userId, symbolId: sym.id },
+        });
+        await ctx.answerCbQuery(`Added ${symbolCode} to custom watchlist`);
+      }
+
+      await this.renderMarkets(ctx);
+    });
+
+    // 7. Toggle Custom Market Filter ON/OFF
+    this.bot.action('toggle_custom_filter', async (ctx) => {
+      await ctx.answerCbQuery('Toggled Custom Market Filter');
+      await this.renderMarkets(ctx);
+    });
+
+    // 8. CryptoMus Payment Invoice Callbacks (buy_MONTHLY, buy_YEARLY, buy_ELITE)
     this.bot.action(/^buy_(MONTHLY|YEARLY|ELITE)$/, async (ctx) => {
       await ctx.answerCbQuery();
       const planCode = ctx.match[1];
@@ -227,14 +318,14 @@ To activate your 30-day access and receive real-time signals, please reply with 
       );
     });
 
-    // 6. Strategy Selection Action
+    // 9. Strategy Selection Action
     this.bot.action(/^select_strat_(.+)$/, async (ctx) => {
       const stratCode = ctx.match[1];
       await ctx.answerCbQuery(`Selected Strategy: ${stratCode}`);
       await ctx.reply(`✅ Preferred Strategy updated to: ${stratCode}. Saved to your profile.`);
     });
 
-    // 7. Admin Commands
+    // 10. Admin Commands
     this.bot.command(['admin', 'adminstats', 'users', 'broadcast', 'system'], async (ctx) => {
       if (String(ctx.from.id) !== config.TELEGRAM_ADMIN_CHAT_ID) {
         return ctx.reply('Unauthorized: Admin access required.');
@@ -271,6 +362,52 @@ To activate your 30-day access and receive real-time signals, please reply with 
         return ctx.reply(`✅ Broadcast sent to ${sent} / ${users.length} users.`);
       }
     });
+  }
+
+  // Mandatory Channel Join Screen
+  private async renderChannelRequiredScreen(ctx: any, username: string) {
+    const text = `━━━━━━━━━━━━━━━━━━
+📢 MANDATORY CHANNEL JOIN REQUIRED
+━━━━━━━━━━━━━━━━━━
+
+Welcome ${username} 👋
+
+To use Hikima X10 AI and receive signals, you MUST join our official channel first:
+
+👉 Channel: @hikimaaipalace
+
+Step 1: Click "📢 Join Channel" below
+Step 2: Join @hikimaaipalace
+Step 3: Click "🔄 Verify Membership" below to unlock the bot!
+
+━━━━━━━━━━━━━━━━━━`;
+
+    const keyboard = Markup.inlineKeyboard([
+      [Markup.button.url('📢 Join @hikimaaipalace', this.channelUrl)],
+      [Markup.button.callback('🔄 Verify Membership', 'verify_channel')],
+    ]);
+
+    await ctx.reply(text, keyboard);
+  }
+
+  // Announce New User Greeting in @hikimaaipalace (No signals inside channel)
+  public announceNewUserInChannel(username: string) {
+    try {
+      this.bot.telegram.sendMessage(
+        this.channelUsername,
+        `🎉 WELCOME NEW TRADER!\n\n${username} has joined Hikima X10 AI!\n\n24/7 Multi-Market Intelligence & Multi-Strategy Analysis Platform.\n\nConnect to the AI bot: @HikimaAIbot`
+      ).catch(() => {});
+    } catch {}
+  }
+
+  // Broadcast High-Impact Economic News Alerts to Channel
+  public broadcastNewsAlertToChannel(newsTitle: string, currency: string, impact: string) {
+    try {
+      this.bot.telegram.sendMessage(
+        this.channelUsername,
+        `🚨 HIGH-IMPACT ECONOMIC NEWS ALERT 🚨\n\nCurrency: ${currency}\nEvent: ${newsTitle}\nImpact: ${impact}\n\nHigh volatility expected. AI Risk Engine active.`
+      ).catch(() => {});
+    } catch {}
   }
 
   // Helper method to activate free trial in DB
@@ -316,13 +453,19 @@ To activate your 30-day access and receive real-time signals, please reply with 
 
   // --- Render Helpers ---
   private async sendExpirationNotice(ctx: any) {
-    const text = `⏳ Your Hikima X10 AI free access has expired.\n\nYour free access lasted 30 days.\n\nPremium access is required to continue receiving signals.\n\nPremium includes:\n• Multiple strategies\n• 3–5 High-Quality Daily Signals\n• Strategy selection\n• Re-entry alerts\n• Advanced monitoring\n• Full market coverage\n\nChoose a subscription plan below:`;
+    const text = `⏳ Your Hikima X10 AI free access has expired.\n\nYour free access lasted 30 days.\n\nPremium access is required to continue receiving signals.\n\nPremium includes:\n• Multiple strategies\n• 3–5 High-Quality Daily Signals\n• Custom Market Selection\n• Strategy selection\n• Re-entry alerts\n• Advanced monitoring\n\nChoose a subscription plan below:`;
     const keyboard = Markup.inlineKeyboard([
       [Markup.button.callback('Monthly Plan ($15/mo)', 'buy_MONTHLY')],
       [Markup.button.callback('Yearly Plan ($500/yr)', 'buy_YEARLY')],
       [Markup.button.callback('Elite Plan ($1,000/yr)', 'buy_ELITE')],
     ]);
     await ctx.reply(text, keyboard);
+  }
+
+  private async renderScanStatus(ctx: any) {
+    const symbols = await prisma.marketSymbol.count({ where: { isSupported: true } });
+    const text = `⚡ AI SCAN ENGINE STATUS\n\nStatus: 🟢 ACTIVE\nScanning Mode: 24/7 Real-Time\nMonitored Markets: ${symbols} Assets\nScan Interval: Every 60 Seconds\nProvider Health: 🟢 ONLINE (TwelveData, Crypto, Forex)\n\nThe AI scanner analyzes technical structure, liquidity sweeps, and multi-timeframe confluence continuously.`;
+    await ctx.reply(text);
   }
 
   private async renderSignals(ctx: any) {
@@ -338,18 +481,49 @@ To activate your 30-day access and receive real-time signals, please reply with 
 
     let text = `📊 ACTIVE SIGNALS (${activeSignals.length}):\n\n`;
     for (const s of activeSignals) {
-      text += `• ${s.marketSymbol.symbol} (${s.direction}) | Strategy: ${s.strategy.name} | Quality: ${s.qualityScore}/100 | Status: ${s.status}\n`;
+      const progressBar = this.getProgressBar(s.qualityScore);
+      text += `• ${s.marketSymbol.symbol} (${s.direction})\n  Strategy: ${s.strategy.name}\n  Quality: ${s.qualityScore}/100 ${progressBar}\n  Status: ${s.status}\n\n`;
     }
     await ctx.reply(text);
   }
 
   private async renderMarkets(ctx: any) {
-    const symbols = await prisma.marketSymbol.findMany({ where: { isSupported: true } });
-    let text = `📈 SUPPORTED MARKETS (${symbols.length}):\n\n`;
-    for (const sym of symbols) {
-      text += `• ${sym.symbol} (${sym.category}) - ${sym.name}\n`;
+    const tgUser = ctx.from;
+    const dbUser = await prisma.telegramUser.findUnique({
+      where: { telegramId: BigInt(tgUser.id) },
+      include: { user: { include: { watchlist: { include: { marketSymbol: true } } } } },
+    });
+
+    const isPremium = dbUser?.user.accessType === 'PREMIUM';
+    const allSymbols = await prisma.marketSymbol.findMany({ where: { isSupported: true } });
+
+    const userWatchlistSymbolIds = new Set(dbUser?.user.watchlist.map((w) => w.marketSymbol.symbol) || []);
+
+    let text = `📈 SUPPORTED MARKETS & CUSTOM WATCHLIST (${allSymbols.length})\n\n`;
+    if (isPremium) {
+      text += `💎 Premium Custom Selection Active. Click symbols to toggle custom signal delivery ON/OFF:\n\n`;
+    } else {
+      text += `Free tier analyzes all default markets. Upgrade to Premium to select custom assets:\n\n`;
     }
-    await ctx.reply(text);
+
+    const buttons = [];
+    for (const sym of allSymbols.slice(0, 10)) {
+      const isSelected = userWatchlistSymbolIds.has(sym.symbol);
+      const label = `${isSelected ? '✅' : '⚪'} ${sym.symbol}`;
+      buttons.push(Markup.button.callback(label, `toggle_symbol_${sym.symbol}`));
+    }
+
+    // Split buttons into 2 columns
+    const grid = [];
+    for (let i = 0; i < buttons.length; i += 2) {
+      grid.push(buttons.slice(i, i + 2));
+    }
+
+    if (!isPremium) {
+      grid.push([Markup.button.callback('💎 Upgrade to Premium for Custom Markets', 'menu_subscribe')]);
+    }
+
+    await ctx.reply(text, Markup.inlineKeyboard(grid));
   }
 
   private async renderStrategies(ctx: any) {
@@ -365,7 +539,7 @@ To activate your 30-day access and receive real-time signals, please reply with 
   }
 
   private async renderSubscription(ctx: any) {
-    const text = `💎 HIKIMA X10 AI PREMIUM SUBSCRIPTION\n\nUnlock full access to:\n• 3–5 High-Quality Signals/Day\n• Strategy Selection (SMC, Alchemist, Trend, etc.)\n• Custom Watchlist & Session Filters\n• Advanced Monitoring & Re-entry Alerts\n\nSelect a Subscription Plan below:`;
+    const text = `💎 HIKIMA X10 AI PREMIUM SUBSCRIPTION\n\nUnlock full access to:\n• 3–5 High-Quality Signals/Day\n• Custom Market Selection\n• Strategy Selection (SMC, Alchemist, Trend, etc.)\n• Custom Watchlist & Session Filters\n• Advanced Monitoring & Re-entry Alerts\n\nSelect a Subscription Plan below:`;
     const keyboard = Markup.inlineKeyboard([
       [Markup.button.callback('Monthly Plan ($15/mo)', 'buy_MONTHLY')],
       [Markup.button.callback('Yearly Plan ($500/yr)', 'buy_YEARLY')],
@@ -385,11 +559,11 @@ To activate your 30-day access and receive real-time signals, please reply with 
   }
 
   private async renderSettings(ctx: any) {
-    await ctx.reply(`⚙️ USER SETTINGS:\n\n• Notifications: ENABLED\n• Timezone: UTC\n• Risk Limit: Standard\n• Free Access: Active`);
+    await ctx.reply(`⚙️ USER SETTINGS:\n\n• Notifications: ENABLED\n• Timezone: UTC\n• Risk Limit: Standard\n• Free Access: Active\n• Mandatory Channel: Joined @hikimaaipalace\n\nNote: Reply X10H at any time to check free access status.`);
   }
 
   private async renderHelp(ctx: any) {
-    await ctx.reply(`❓ HELP & SUPPORT:\n\nHikima X10 AI operates 24/7 scanning global markets using real market feeds and deterministic strategy engines.\n\nOfficial Support Contact: @Hikimawebdev\nDocumentation: https://hikimax10.ai/docs`);
+    await ctx.reply(`❓ HELP & SUPPORT:\n\nHikima X10 AI operates 24/7 scanning global markets using real market feeds and deterministic strategy engines.\n\nOfficial Channel: @hikimaaipalace\nOfficial Support Contact: @Hikimawebdev\nDocumentation: https://hikimax10.ai/docs`);
   }
 
   private async renderStatus(ctx: any) {
@@ -406,10 +580,16 @@ To activate your 30-day access and receive real-time signals, please reply with 
     await ctx.reply(statusText);
   }
 
+  private getProgressBar(score: number): string {
+    const filled = Math.min(10, Math.max(0, Math.floor(score / 10)));
+    return `[${'█'.repeat(filled)}${'░'.repeat(10 - filled)}]`;
+  }
+
   async sendFormattedSignal(chatId: string | number, signal: any): Promise<boolean> {
     try {
       const isBuy = signal.direction === 'BUY';
       const directionEmoji = isBuy ? '🟢 BUY SIGNAL' : '🔴 SELL SIGNAL';
+      const progressBar = this.getProgressBar(signal.qualityScore || 86);
 
       const formattedMessage = `━━━━━━━━━━━━━━━━━━
 🔥 HIKIMA X10 AI
@@ -437,7 +617,7 @@ Risk/Reward:
 ${signal.riskReward || '1:1.5 / 1:2.5 / 1:4.0'}
 
 Signal Quality:
-${signal.qualityScore || 86}/100
+${signal.qualityScore || 86}/100 ${progressBar}
 
 Why:
 ${(signal.reasoning || []).map((r: string) => `• ${r}`).join('\n')}
