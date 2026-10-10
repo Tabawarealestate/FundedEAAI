@@ -26,22 +26,34 @@ async function bootstrap() {
   const riskEngine = new RiskEngine();
   const deduplicationService = new SignalDeduplicationService();
 
-  // 3. Launch Telegram Bot Service
+  // 3. Start HTTP API Server
+  app.listen(config.PORT, () => {
+    console.log(`🌐 Hikima X10 AI Server listening on port ${config.PORT} [${config.NODE_ENV}]`);
+  });
+
+  // 4. Launch Telegram Bot Service with Long Polling
   let botService: TelegramBotService | null = null;
-  if (config.TELEGRAM_BOT_TOKEN) {
+  const botToken = config.TELEGRAM_BOT_TOKEN || '8991582006:AAFA7EEdkW4JNPIn20f9M_Lm6iJbrwxt8_w';
+
+  if (botToken) {
     try {
-      botService = new TelegramBotService(config.TELEGRAM_BOT_TOKEN);
-      botService.bot.launch().then(() => {
-        console.log('🤖 Telegram Bot launched and listening for messages.');
+      console.log('🤖 Connecting to Telegram Bot API...');
+      botService = new TelegramBotService(botToken);
+      botService.bot.launch({ dropPendingUpdates: false }).then(() => {
+        console.log('🤖 Telegram Bot (@HikimaAIbot) successfully launched and listening for updates!');
       }).catch((err) => {
-        console.error('⚠️ Telegram Bot launch warning:', err);
+        console.error('⚠️ Telegram Bot launch error:', err);
       });
     } catch (err) {
       console.error('⚠️ Telegram Bot initialization error:', err);
     }
   }
 
-  // 4. Start Background Signal Monitoring Worker Loop (Runs every 15s)
+  // Graceful termination
+  process.once('SIGINT', () => botService?.bot.stop('SIGINT'));
+  process.once('SIGTERM', () => botService?.bot.stop('SIGTERM'));
+
+  // 5. Start Background Signal Monitoring Worker Loop (Runs every 15s)
   setInterval(async () => {
     try {
       const events = await monitoringWorker.checkActiveSignals();
@@ -59,7 +71,7 @@ async function bootstrap() {
     }
   }, 15000);
 
-  // 5. Start Market Scanner Loop (Runs every 60s across supported watchlist symbols)
+  // 6. Start Market Scanner Loop (Runs every 60s across supported watchlist symbols)
   setInterval(async () => {
     try {
       const symbols = await prisma.marketSymbol.findMany({ where: { isSupported: true } });
@@ -142,7 +154,7 @@ async function bootstrap() {
 
         console.log(`🔥 [SIGNAL GENERATED] ${sym.symbol} ${consensus.finalDirection} (${consensus.consensusScore}/100) Strategy: ${dbStrategy.name}`);
 
-        // Dispatch Signal to Active Telegram Users respecting Custom Watchlist Filters
+        // Dispatch Signal to Active Telegram Users
         if (botService) {
           const activeUsers = await prisma.telegramUser.findMany({
             include: { user: { include: { watchlist: true } } },
@@ -177,7 +189,7 @@ async function bootstrap() {
             if (isPremium && tu.user.watchlist && tu.user.watchlist.length > 0) {
               const userSelectedSymbolIds = new Set(tu.user.watchlist.map((w) => w.symbolId));
               if (!userSelectedSymbolIds.has(sym.id)) {
-                continue; // Skip symbols not selected in Premium custom watchlist
+                continue;
               }
             }
 
@@ -207,11 +219,6 @@ async function bootstrap() {
       console.error('⚠️ Market scanner error:', err);
     }
   }, 60000);
-
-  // 6. Start HTTP API Server
-  app.listen(config.PORT, () => {
-    console.log(`🌐 Hikima X10 AI Server listening on port ${config.PORT} [${config.NODE_ENV}]`);
-  });
 }
 
 if (process.env.NODE_ENV !== 'test') {
