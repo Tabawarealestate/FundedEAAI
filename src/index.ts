@@ -31,15 +31,18 @@ async function bootstrap() {
     console.log(`🌐 Hikima X10 AI Server listening on port ${config.PORT} [${config.NODE_ENV}]`);
   });
 
-  // 4. Launch Telegram Bot Service with Long Polling
+  // 4. Launch Telegram Bot Service with Fast Optimized Long Polling
   let botService: TelegramBotService | null = null;
-  const botToken = config.TELEGRAM_BOT_TOKEN || '8991582006:AAFA7EEdkW4JNPIn20f9M_Lm6iJbrwxt8_w';
+  const botToken = config.TELEGRAM_BOT_TOKEN;
 
   if (botToken) {
     try {
       console.log('🤖 Connecting to Telegram Bot API...');
       botService = new TelegramBotService(botToken);
-      botService.bot.launch({ dropPendingUpdates: false }).then(() => {
+      botService.bot.launch({
+        allowedUpdates: ['message', 'callback_query'],
+        dropPendingUpdates: true,
+      }).then(() => {
         console.log('🤖 Telegram Bot (@HikimaAIbot) successfully launched and listening for updates!');
       }).catch((err) => {
         console.error('⚠️ Telegram Bot launch error:', err);

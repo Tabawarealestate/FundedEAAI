@@ -31,15 +31,24 @@ export class TelegramBotService {
     });
   }
 
+  // Persistent Reply Keyboard at the bottom of chat (Text Section)
+  private getBottomReplyKeyboard() {
+    return Markup.keyboard([
+      ['📊 Signals', '📈 Markets'],
+      ['🧠 Strategies', '💎 Premium'],
+      ['⚡ Scan Status', '📊 Performance'],
+      ['⚙️ Settings', '❓ Help'],
+    ]).resize();
+  }
+
   // Check if user is a member of @hikimaaipalace
   public async checkChannelMembership(userId: number): Promise<boolean> {
     try {
       if (String(userId) === config.TELEGRAM_ADMIN_CHAT_ID) return true;
       const member = await this.bot.telegram.getChatMember(this.channelUsername, userId);
       return ['creator', 'administrator', 'member'].includes(member.status);
-    } catch (err: any) {
-      console.error(`Warning: getChatMember check for ${userId} in ${this.channelUsername} failed:`, err.message || err);
-      return true; // Safe fallback if channel lookup fails
+    } catch (err) {
+      return true; // Safe fallback if channel API lookup fails
     }
   }
 
@@ -47,15 +56,12 @@ export class TelegramBotService {
     // 1. /start command
     this.bot.start(async (ctx) => {
       try {
-        console.log('>>> EXECUTING /start HANDLER FOR:', ctx.from);
         const tgUser = ctx.from;
         const username = tgUser.username ? `@${tgUser.username}` : tgUser.first_name || 'Trader';
         const payload = ctx.startPayload ? ctx.startPayload.trim().toUpperCase() : '';
 
-        // Verify Channel Membership
+        // Fast Channel Membership Verification
         const isMember = await this.checkChannelMembership(tgUser.id);
-        console.log(`>>> CHANNEL MEMBERSHIP FOR ${tgUser.id}:`, isMember);
-
         if (!isMember) {
           return this.renderChannelRequiredScreen(ctx, username);
         }
@@ -86,9 +92,7 @@ To activate your 30-day access and receive real-time signals, please reply with 
 👉 Please type: X10H
 
 ━━━━━━━━━━━━━━━━━━`;
-          const replyRes = await ctx.reply(codePromptNote);
-          console.log('>>> REPLIED CODE PROMPT NOTE SUCCESS:', replyRes.message_id);
-          return;
+          return ctx.reply(codePromptNote);
         }
 
         if (dbTgUser.user.accessType === 'FREE' && dbTgUser.user.trialEndDate && new Date() > new Date(dbTgUser.user.trialEndDate)) {
@@ -97,19 +101,19 @@ To activate your 30-day access and receive real-time signals, please reply with 
 
         const accessLabel = dbTgUser.user.accessType === 'PREMIUM' ? '💎 PREMIUM' : 'FREE (Active)';
 
-        const welcomeText = `Welcome ${username} 👋\n\nYou are connected to Hikima X10 AI.\n\n🟢 AI SCAN ENGINE: ACTIVE\n📡 Monitored Markets: 22 Assets\n⚡ Real-time Multi-Strategy Signals\n🛡 Automatic Signal Monitoring\n\nAccess: ${accessLabel}\n\nChoose an option below:`;
+        const welcomeText = `Welcome ${username} 👋\n\nYou are connected to Hikima X10 AI.\n\n🟢 AI SCAN ENGINE: ACTIVE\n📡 Monitored Markets: 22 Assets\n⚡ Real-time Multi-Strategy Signals\n🛡 Automatic Signal Monitoring\n\nAccess: ${accessLabel}\n\nUse the bottom menu buttons below to navigate instantly!`;
 
-        const keyboard = Markup.inlineKeyboard([
+        const inlineKb = Markup.inlineKeyboard([
           [Markup.button.callback('📊 Active Signals', 'menu_signals'), Markup.button.callback('📈 Watchlist & Markets', 'menu_markets')],
           [Markup.button.callback('🧠 Strategy Engine', 'menu_strategies'), Markup.button.callback('💎 Premium Plans', 'menu_subscribe')],
           [Markup.button.callback('⚡ AI Live Scan Status', 'menu_scan_status'), Markup.button.callback('📊 Performance', 'menu_performance')],
           [Markup.button.callback('⚙️ User Settings', 'menu_settings'), Markup.button.callback('❓ Help & Support', 'menu_help')],
         ]);
 
-        const replyRes = await ctx.reply(welcomeText, keyboard);
-        console.log('>>> REPLIED WELCOME TEXT SUCCESS:', replyRes.message_id);
+        await ctx.reply(welcomeText, this.getBottomReplyKeyboard());
+        await ctx.reply('📋 Quick Access Navigation Menu:', inlineKb);
       } catch (err) {
-        console.error('CRITICAL ERROR in /start handler:', err);
+        console.error('Error in /start handler:', err);
         await ctx.reply('Welcome to Hikima X10 AI! Please reply with code X10H to activate free access.');
       }
     });
@@ -131,14 +135,23 @@ To activate your 30-day access and receive real-time signals, please reply with 
       await ctx.reply(`✅ Channel Membership Verified! Welcome to Hikima X10 AI.\n\nPlease reply with code X10H to activate your 30-day access:`);
     });
 
-    // 3. Text Message Handler for FREE ACCESS CODE Validation (X10H)
+    // 3. Text Message Handler for Bottom Reply Keyboard & Access Code Validation
     this.bot.on('text', async (ctx, next) => {
-      if (ctx.message.text.startsWith('/')) return next();
-
+      const textInput = ctx.message.text.trim();
       const tgUser = ctx.from;
       const username = tgUser.username ? `@${tgUser.username}` : tgUser.first_name || 'Trader';
 
-      console.log('>>> TEXT MESSAGE RECEIVED FROM:', username, '->', ctx.message.text);
+      // Instant Bottom Keyboard Button Matching
+      if (textInput === '📊 Signals') return this.renderSignals(ctx);
+      if (textInput === '📈 Markets') return this.renderMarkets(ctx);
+      if (textInput === '🧠 Strategies') return this.renderStrategies(ctx);
+      if (textInput === '💎 Premium') return this.renderSubscription(ctx);
+      if (textInput === '⚡ Scan Status') return this.renderScanStatus(ctx);
+      if (textInput === '📊 Performance') return this.renderPerformance(ctx);
+      if (textInput === '⚙️ Settings') return this.renderSettings(ctx);
+      if (textInput === '❓ Help') return this.renderHelp(ctx);
+
+      if (textInput.startsWith('/')) return next();
 
       // Enforce Channel Membership
       const isMember = await this.checkChannelMembership(tgUser.id);
@@ -146,7 +159,7 @@ To activate your 30-day access and receive real-time signals, please reply with 
         return this.renderChannelRequiredScreen(ctx, username);
       }
 
-      const inputCode = ctx.message.text.trim().toUpperCase();
+      const inputCode = textInput.toUpperCase();
 
       let dbTgUser = await prisma.telegramUser.findUnique({
         where: { telegramId: BigInt(tgUser.id) },
@@ -160,13 +173,13 @@ To activate your 30-day access and receive real-time signals, please reply with 
           if (dbTgUser.user.accessType === 'FREE' && dbTgUser.user.trialEndDate && new Date() > new Date(dbTgUser.user.trialEndDate)) {
             return this.sendExpirationNotice(ctx);
           }
-          return ctx.reply(`ℹ️ Your free trial is already active (${username}). Type /status to check your plan.`);
+          return ctx.reply(`ℹ️ Your free trial is already active (${username}). Type /status to check your plan.`, this.getBottomReplyKeyboard());
         }
 
         dbTgUser = await this.activateFreeUser(tgUser, ctx.chat.id, inputCode);
         this.announceNewUserInChannel(username);
 
-        const welcomeText = `✅ FREE ACCESS CODE VALIDATED!\n\nWelcome ${username} 👋\n\n🟢 AI SCAN ENGINE: ACTIVE\nAccess: FREE (30 Days Active)\n\nChoose an option below:`;
+        const welcomeText = `✅ FREE ACCESS CODE VALIDATED!\n\nWelcome ${username} 👋\n\n🟢 AI SCAN ENGINE: ACTIVE\nAccess: FREE (30 Days Active)\n\nUse the bottom menu buttons below to navigate:`;
 
         const keyboard = Markup.inlineKeyboard([
           [Markup.button.callback('📊 Active Signals', 'menu_signals'), Markup.button.callback('📈 Markets & Watchlist', 'menu_markets')],
@@ -174,7 +187,8 @@ To activate your 30-day access and receive real-time signals, please reply with 
           [Markup.button.callback('⚙️ Settings', 'menu_settings'), Markup.button.callback('❓ Help & Support', 'menu_help')],
         ]);
 
-        return ctx.reply(welcomeText, keyboard);
+        await ctx.reply(welcomeText, this.getBottomReplyKeyboard());
+        return ctx.reply('📋 Navigation Menu:', keyboard);
       }
 
       if (!dbTgUser) {
@@ -186,13 +200,14 @@ To activate your 30-day access and receive real-time signals, please reply with 
       return next();
     });
 
-    // 4. Commands
+    // 4. Commands (support handle tag stripping e.g., /signals@HikimaAIbot -> signals)
     this.bot.command(['menu', 'signals', 'markets', 'strategies', 'settings', 'performance', 'subscription', 'subscribe', 'help', 'support', 'status', 'stop'], async (ctx) => {
       const tgUser = ctx.from;
       const isMember = await this.checkChannelMembership(tgUser.id);
       if (!isMember) return this.renderChannelRequiredScreen(ctx, tgUser.username ? `@${tgUser.username}` : tgUser.first_name);
 
-      const command = ctx.message.text.split(' ')[0].replace('/', '');
+      const rawCmd = ctx.message.text.split(' ')[0].replace('/', '');
+      const command = rawCmd.split('@')[0];
 
       if (command === 'menu') {
         return ctx.reply('📋 Main Menu:', Markup.inlineKeyboard([
@@ -348,7 +363,8 @@ To activate your 30-day access and receive real-time signals, please reply with 
         return ctx.reply('Unauthorized: Admin access required.');
       }
 
-      const cmd = ctx.message.text.split(' ')[0].replace('/', '');
+      const rawCmd = ctx.message.text.split(' ')[0].replace('/', '');
+      const cmd = rawCmd.split('@')[0];
 
       if (cmd === 'admin' || cmd === 'system') {
         return ctx.reply('🛡 ADMIN CONTROL PANEL:\n\nAvailable commands:\n/adminstats - System metrics\n/users - User stats\n/broadcast <text> - Mass message');
@@ -482,7 +498,7 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
   private async renderScanStatus(ctx: any) {
     const symbols = await prisma.marketSymbol.count({ where: { isSupported: true } });
     const text = `⚡ AI SCAN ENGINE STATUS\n\nStatus: 🟢 ACTIVE\nScanning Mode: 24/7 Real-Time\nMonitored Markets: ${symbols} Assets\nScan Interval: Every 60 Seconds\nProvider Health: 🟢 ONLINE (TwelveData, Crypto, Forex)\n\nThe AI scanner analyzes technical structure, liquidity sweeps, and multi-timeframe confluence continuously.`;
-    await ctx.reply(text);
+    await ctx.reply(text, this.getBottomReplyKeyboard());
   }
 
   private async renderSignals(ctx: any) {
@@ -493,7 +509,7 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
     });
 
     if (activeSignals.length === 0) {
-      return ctx.reply('📊 ACTIVE SIGNALS:\n\nNo active signals currently open. Continuous market analysis running.');
+      return ctx.reply('📊 ACTIVE SIGNALS:\n\nNo active signals currently open. Continuous market analysis running.', this.getBottomReplyKeyboard());
     }
 
     let text = `📊 ACTIVE SIGNALS (${activeSignals.length}):\n\n`;
@@ -501,7 +517,7 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
       const progressBar = this.getProgressBar(s.qualityScore);
       text += `• ${s.marketSymbol.symbol} (${s.direction})\n  Strategy: ${s.strategy.name}\n  Quality: ${s.qualityScore}/100 ${progressBar}\n  Status: ${s.status}\n\n`;
     }
-    await ctx.reply(text);
+    await ctx.reply(text, this.getBottomReplyKeyboard());
   }
 
   private async renderMarkets(ctx: any) {
@@ -571,15 +587,15 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
     const losses = stats ? stats.totalLosses : 0;
     const winRate = total > 0 ? ((wins / total) * 100).toFixed(1) : 'N/A';
 
-    await ctx.reply(`📊 PLATFORM PERFORMANCE:\n\nTotal Completed Signals: ${total}\nWins: ${wins}\nLosses: ${losses}\nWin Rate: ${winRate}%\n\nPerformance metrics calculated strictly from verified database historical results.`);
+    await ctx.reply(`📊 PLATFORM PERFORMANCE:\n\nTotal Completed Signals: ${total}\nWins: ${wins}\nLosses: ${losses}\nWin Rate: ${winRate}%\n\nPerformance metrics calculated strictly from verified database historical results.`, this.getBottomReplyKeyboard());
   }
 
   private async renderSettings(ctx: any) {
-    await ctx.reply(`⚙️ USER SETTINGS:\n\n• Notifications: ENABLED\n• Timezone: UTC\n• Risk Limit: Standard\n• Free Access: Active\n• Mandatory Channel: Joined @hikimaaipalace\n\nNote: Reply X10H at any time to check free access status.`);
+    await ctx.reply(`⚙️ USER SETTINGS:\n\n• Notifications: ENABLED\n• Timezone: UTC\n• Risk Limit: Standard\n• Free Access: Active\n• Mandatory Channel: Joined @hikimaaipalace\n\nNote: Reply X10H at any time to check free access status.`, this.getBottomReplyKeyboard());
   }
 
   private async renderHelp(ctx: any) {
-    await ctx.reply(`❓ HELP & SUPPORT:\n\nHikima X10 AI operates 24/7 scanning global markets using real market feeds and deterministic strategy engines.\n\nOfficial Channel: @hikimaaipalace\nOfficial Support Contact: @Hikimawebdev\nDocumentation: https://hikimax10.ai/docs`);
+    await ctx.reply(`❓ HELP & SUPPORT:\n\nHikima X10 AI operates 24/7 scanning global markets using real market feeds and deterministic strategy engines.\n\nOfficial Channel: @hikimaaipalace\nOfficial Support Contact: @Hikimawebdev\nDocumentation: https://hikimax10.ai/docs`, this.getBottomReplyKeyboard());
   }
 
   private async renderStatus(ctx: any) {
@@ -593,7 +609,7 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
 
     const isPremium = dbUser.user.accessType === 'PREMIUM';
     const statusText = `🔥 HIKIMA X10 AI STATUS\n\nUser: ${tgUser.username ? '@' + tgUser.username : tgUser.first_name}\nAccess: ${isPremium ? '💎 PREMIUM' : 'FREE'}\nDaily Signals Used: ${dbUser.dailySignalCount} / ${isPremium ? 5 : 1}\nTrial End Date: ${dbUser.user.trialEndDate ? dbUser.user.trialEndDate.toISOString().split('T')[0] : 'N/A'}`;
-    await ctx.reply(statusText);
+    await ctx.reply(statusText, this.getBottomReplyKeyboard());
   }
 
   private getProgressBar(score: number): string {
