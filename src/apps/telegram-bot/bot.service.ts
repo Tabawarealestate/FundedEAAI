@@ -12,6 +12,7 @@ export class TelegramBotService {
   constructor(token = config.TELEGRAM_BOT_TOKEN) {
     this.bot = new Telegraf(token);
     this.setupErrorHandling();
+    this.setupMiddlewares();
     this.setupHandlers();
   }
 
@@ -22,6 +23,14 @@ export class TelegramBotService {
     });
   }
 
+  private setupMiddlewares() {
+    this.bot.use((ctx, next) => {
+      const msgText = (ctx.message as any)?.text || (ctx.callbackQuery as any)?.data || '';
+      console.log(`📩 INCOMING TELEGRAM UPDATE [${ctx.updateType}] from ${ctx.from?.username || ctx.from?.id}:`, msgText);
+      return next();
+    });
+  }
+
   // Check if user is a member of @hikimaaipalace
   public async checkChannelMembership(userId: number): Promise<boolean> {
     try {
@@ -29,8 +38,8 @@ export class TelegramBotService {
       const member = await this.bot.telegram.getChatMember(this.channelUsername, userId);
       return ['creator', 'administrator', 'member'].includes(member.status);
     } catch (err) {
-      // If bot is not admin in channel or error occurs in testing, default to true
-      return true;
+      console.error(`Warning: getChatMember check for ${userId} in ${this.channelUsername} failed:`, err);
+      return true; // Safe fallback if channel lookup fails
     }
   }
 
@@ -197,7 +206,7 @@ To activate your 30-day access and receive real-time signals, please reply with 
       if (command === 'stop') return ctx.reply('⏹ Notifications stopped. Type /start to resume.');
     });
 
-    // 5. Interactive Action Handlers (Edits/refreshes cleanly)
+    // 5. Interactive Action Handlers
     this.bot.action('menu_signals', async (ctx) => {
       await ctx.answerCbQuery();
       await this.renderSignals(ctx);
@@ -231,7 +240,7 @@ To activate your 30-day access and receive real-time signals, please reply with 
       await this.renderScanStatus(ctx);
     });
 
-    // 6. Premium Watchlist Symbol Toggle Actions (e.g. toggle_XAUUSD, toggle_BTCUSD, toggle_EURUSD)
+    // 6. Premium Watchlist Symbol Toggle Actions
     this.bot.action(/^toggle_symbol_(.+)$/, async (ctx) => {
       const symbolCode = ctx.match[1];
       const tgUser = ctx.from;
@@ -513,7 +522,6 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
       buttons.push(Markup.button.callback(label, `toggle_symbol_${sym.symbol}`));
     }
 
-    // Split buttons into 2 columns
     const grid = [];
     for (let i = 0; i < buttons.length; i += 2) {
       grid.push(buttons.slice(i, i + 2));
