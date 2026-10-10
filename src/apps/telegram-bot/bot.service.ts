@@ -26,20 +26,36 @@ export class TelegramBotService {
       try {
         const tgUser = ctx.from;
         const username = tgUser.username ? `@${tgUser.username}` : tgUser.first_name || 'Trader';
+        const payload = ctx.startPayload ? ctx.startPayload.trim().toUpperCase() : '';
 
-        const dbTgUser = await prisma.telegramUser.findUnique({
+        let dbTgUser = await prisma.telegramUser.findUnique({
           where: { telegramId: BigInt(tgUser.id) },
           include: { user: { include: { subscriptions: true } } },
         });
 
-        if (!dbTgUser) {
-          // Prompt new user for FREE ACCESS CODE (X10H)
-          return ctx.reply(
-            `Welcome ${username} 👋\n\nTo activate your 30-day access, please enter your FREE ACCESS CODE below:\n\n🔑 Code: X10H`
-          );
+        const validCode = (config.DEFAULT_FREE_ACCESS_CODE || 'X10H').toUpperCase();
+
+        if (!dbTgUser && (payload === validCode || payload === 'X10H' || payload === 'X10')) {
+          dbTgUser = await this.activateFreeUser(tgUser, ctx.chat.id, 'X10H');
         }
 
-        // Check if free trial has expired
+        if (!dbTgUser) {
+          const codePromptNote = `━━━━━━━━━━━━━━━━━━
+🔑 FREE ACCESS CODE REQUIRED
+━━━━━━━━━━━━━━━━━━
+
+Welcome ${username} 👋
+
+Thank you for connecting to Hikima X10 AI.
+
+To activate your 30-day access and receive real-time signals, please reply with your FREE ACCESS CODE:
+
+👉 Please type: X10H
+
+━━━━━━━━━━━━━━━━━━`;
+          return ctx.reply(codePromptNote);
+        }
+
         if (dbTgUser.user.accessType === 'FREE' && dbTgUser.user.trialEndDate && new Date() > new Date(dbTgUser.user.trialEndDate)) {
           return this.sendExpirationNotice(ctx);
         }
@@ -58,7 +74,7 @@ export class TelegramBotService {
         await ctx.reply(welcomeText, keyboard);
       } catch (err) {
         console.error('Error in /start handler:', err);
-        await ctx.reply('Welcome to Hikima X10 AI! Type X10H to activate free access.');
+        await ctx.reply('Welcome to Hikima X10 AI! Please reply with code X10H to activate free access.');
       }
     });
 
@@ -74,56 +90,38 @@ export class TelegramBotService {
 
       let dbTgUser = await prisma.telegramUser.findUnique({
         where: { telegramId: BigInt(tgUser.id) },
-        include: { user: true },
+        include: { user: { include: { subscriptions: true } } },
       });
 
-      if (!dbTgUser) {
-        // Validate Server-Side Free Access Code
-        const validCode = config.DEFAULT_FREE_ACCESS_CODE || 'X10H';
+      const validCode = (config.DEFAULT_FREE_ACCESS_CODE || 'X10H').toUpperCase();
 
-        if (inputCode === validCode || inputCode === 'X10H' || inputCode === 'X10') {
-          const trialStart = new Date();
-          const trialEnd = new Date(trialStart.getTime() + 30 * 24 * 3600 * 1000); // 30 days trial
-
-          const newUser = await prisma.user.create({
-            data: {
-              accessType: 'FREE',
-              freeCodeUsed: 'X10H',
-              trialStartDate: trialStart,
-              trialEndDate: trialEnd,
-              preferences: {
-                create: {
-                  language: tgUser.language_code || 'en',
-                },
-              },
-            },
-          });
-
-          dbTgUser = await prisma.telegramUser.create({
-            data: {
-              userId: newUser.id,
-              telegramId: BigInt(tgUser.id),
-              username: tgUser.username || null,
-              firstName: tgUser.first_name || null,
-              lastName: tgUser.last_name || null,
-              chatId: BigInt(ctx.chat.id),
-            },
-            include: { user: true },
-          });
-
-          const welcomeText = `✅ FREE ACCESS CODE VALIDATED!\n\nWelcome ${username} 👋\n\nYou are now connected to Hikima X10 AI.\n\n24/7 multi-market analysis.\nReal-time market intelligence.\nMulti-strategy signals.\nAutomatic signal monitoring.\n\nAccess: FREE (30 Days Active)\n\nChoose an option below.`;
-
-          const keyboard = Markup.inlineKeyboard([
-            [Markup.button.callback('📊 Signals', 'menu_signals'), Markup.button.callback('📈 Markets', 'menu_markets')],
-            [Markup.button.callback('🧠 Strategies', 'menu_strategies'), Markup.button.callback('💎 Premium', 'menu_subscribe')],
-            [Markup.button.callback('📊 Performance', 'menu_performance'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
-            [Markup.button.callback('❓ Help & Support', 'menu_help')],
-          ]);
-
-          return ctx.reply(welcomeText, keyboard);
-        } else {
-          return ctx.reply(`❌ Invalid Access Code.\n\nPlease enter the correct free access code to unlock your 30-day trial:\n\n🔑 Required Code: X10H`);
+      if (inputCode === validCode || inputCode === 'X10H' || inputCode === 'X10') {
+        if (dbTgUser) {
+          // User already exists and has used free trial before -> anti-abuse protection
+          if (dbTgUser.user.accessType === 'FREE' && dbTgUser.user.trialEndDate && new Date() > new Date(dbTgUser.user.trialEndDate)) {
+            return this.sendExpirationNotice(ctx);
+          }
+          return ctx.reply(`ℹ️ Your free trial is already active (${username}). Type /status to check your plan.`);
         }
+
+        dbTgUser = await this.activateFreeUser(tgUser, ctx.chat.id, inputCode);
+
+        const welcomeText = `✅ FREE ACCESS CODE VALIDATED!\n\nWelcome ${username} 👋\n\nYou are now connected to Hikima X10 AI.\n\n24/7 multi-market analysis.\nReal-time market intelligence.\nMulti-strategy signals.\nAutomatic signal monitoring.\n\nAccess: FREE (30 Days Active)\n\nChoose an option below.`;
+
+        const keyboard = Markup.inlineKeyboard([
+          [Markup.button.callback('📊 Signals', 'menu_signals'), Markup.button.callback('📈 Markets', 'menu_markets')],
+          [Markup.button.callback('🧠 Strategies', 'menu_strategies'), Markup.button.callback('💎 Premium', 'menu_subscribe')],
+          [Markup.button.callback('📊 Performance', 'menu_performance'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
+          [Markup.button.callback('❓ Help & Support', 'menu_help')],
+        ]);
+
+        return ctx.reply(welcomeText, keyboard);
+      }
+
+      if (!dbTgUser) {
+        return ctx.reply(
+          `❌ Invalid Access Code.\n\nPlease enter the correct free access code to unlock your 30-day trial:\n\n🔑 Required Code: X10H`
+        );
       }
 
       return next();
@@ -194,7 +192,7 @@ export class TelegramBotService {
         include: { user: true },
       });
 
-      if (!dbUser) return ctx.reply('Please register first by typing /start and entering code X10H.');
+      if (!dbUser) return ctx.reply('Please reply with code X10H to activate free access first.');
 
       const plan = await prisma.plan.findUnique({ where: { code: planCode } });
       if (!plan) return ctx.reply('Selected plan is currently unavailable.');
@@ -272,6 +270,47 @@ export class TelegramBotService {
         }
         return ctx.reply(`✅ Broadcast sent to ${sent} / ${users.length} users.`);
       }
+    });
+  }
+
+  // Helper method to activate free trial in DB
+  private async activateFreeUser(tgUser: any, chatId: number | bigint, codeUsed: string) {
+    const trialStart = new Date();
+    const trialEnd = new Date(trialStart.getTime() + 30 * 24 * 3600 * 1000); // 30 days trial
+
+    const existing = await prisma.telegramUser.findUnique({
+      where: { telegramId: BigInt(tgUser.id) },
+      include: { user: { include: { subscriptions: true } } },
+    });
+
+    if (existing) {
+      return existing;
+    }
+
+    const newUser = await prisma.user.create({
+      data: {
+        accessType: 'FREE',
+        freeCodeUsed: codeUsed,
+        trialStartDate: trialStart,
+        trialEndDate: trialEnd,
+        preferences: {
+          create: {
+            language: tgUser.language_code || 'en',
+          },
+        },
+      },
+    });
+
+    return prisma.telegramUser.create({
+      data: {
+        userId: newUser.id,
+        telegramId: BigInt(tgUser.id),
+        username: tgUser.username || null,
+        firstName: tgUser.first_name || null,
+        lastName: tgUser.last_name || null,
+        chatId: BigInt(chatId),
+      },
+      include: { user: { include: { subscriptions: true } } },
     });
   }
 
@@ -360,7 +399,7 @@ export class TelegramBotService {
       include: { user: true },
     });
 
-    if (!dbUser) return ctx.reply('Please register first by typing /start and entering code X10H.');
+    if (!dbUser) return ctx.reply('Please reply with code X10H to activate free access.');
 
     const isPremium = dbUser.user.accessType === 'PREMIUM';
     const statusText = `🔥 HIKIMA X10 AI STATUS\n\nUser: ${tgUser.username ? '@' + tgUser.username : tgUser.first_name}\nAccess: ${isPremium ? '💎 PREMIUM' : 'FREE'}\nDaily Signals Used: ${dbUser.dailySignalCount} / ${isPremium ? 5 : 1}\nTrial End Date: ${dbUser.user.trialEndDate ? dbUser.user.trialEndDate.toISOString().split('T')[0] : 'N/A'}`;

@@ -169,20 +169,8 @@ async function bootstrap() {
             const isPremium = tu.user.accessType === 'PREMIUM';
             const trialExpired = tu.user.accessType === 'FREE' && tu.user.trialEndDate && now > new Date(tu.user.trialEndDate);
 
+            // Skip expired users quietly during background signal scanning
             if (trialExpired) {
-              botService.bot.telegram.sendMessage(
-                String(tu.telegramId),
-                `⏳ Your Hikima X10 AI 30-day free trial has expired.\n\nFree signals have stopped. Premium subscription is required to continue receiving signals.\n\nType /subscribe or click below:`,
-                {
-                  reply_markup: {
-                    inline_keyboard: [
-                      [{ text: 'Monthly Plan ($15/mo)', callback_data: 'buy_MONTHLY' }],
-                      [{ text: 'Yearly Plan ($500/yr)', callback_data: 'buy_YEARLY' }],
-                      [{ text: 'Elite Plan ($1,000/yr)', callback_data: 'buy_ELITE' }],
-                    ]
-                  }
-                }
-              ).catch(() => {});
               continue;
             }
 
