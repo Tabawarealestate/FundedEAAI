@@ -9,63 +9,76 @@ export class TelegramBotService {
 
   constructor(token = config.TELEGRAM_BOT_TOKEN) {
     this.bot = new Telegraf(token);
+    this.setupErrorHandling();
     this.setupHandlers();
+  }
+
+  private setupErrorHandling() {
+    this.bot.catch((err: any, ctx) => {
+      console.error(`⚠️ Telegram Bot error on update ${ctx.updateType}:`, err);
+      ctx.reply('⚠️ An operational error occurred. Please try again or type /start.').catch(() => {});
+    });
   }
 
   private setupHandlers() {
     // 1. /start command
     this.bot.start(async (ctx) => {
-      const tgUser = ctx.from;
-      const username = tgUser.username ? `@${tgUser.username}` : tgUser.first_name || 'Trader';
+      try {
+        const tgUser = ctx.from;
+        const username = tgUser.username ? `@${tgUser.username}` : tgUser.first_name || 'Trader';
 
-      let dbTgUser = await prisma.telegramUser.findUnique({
-        where: { telegramId: BigInt(tgUser.id) },
-        include: { user: { include: { subscriptions: true } } },
-      });
-
-      if (!dbTgUser) {
-        const newUser = await prisma.user.create({
-          data: {
-            accessType: 'FREE',
-            freeCodeUsed: 'X10',
-            trialStartDate: new Date(),
-            trialEndDate: new Date(Date.now() + 30 * 24 * 3600 * 1000), // 30 days
-            preferences: {
-              create: {
-                language: tgUser.language_code || 'en',
-              },
-            },
-          },
-        });
-
-        dbTgUser = await prisma.telegramUser.create({
-          data: {
-            userId: newUser.id,
-            telegramId: BigInt(tgUser.id),
-            username: tgUser.username || null,
-            firstName: tgUser.first_name || null,
-            lastName: tgUser.last_name || null,
-            chatId: BigInt(ctx.chat.id),
-          },
+        let dbTgUser = await prisma.telegramUser.findUnique({
+          where: { telegramId: BigInt(tgUser.id) },
           include: { user: { include: { subscriptions: true } } },
         });
+
+        if (!dbTgUser) {
+          const newUser = await prisma.user.create({
+            data: {
+              accessType: 'FREE',
+              freeCodeUsed: 'X10',
+              trialStartDate: new Date(),
+              trialEndDate: new Date(Date.now() + 30 * 24 * 3600 * 1000), // 30 days
+              preferences: {
+                create: {
+                  language: tgUser.language_code || 'en',
+                },
+              },
+            },
+          });
+
+          dbTgUser = await prisma.telegramUser.create({
+            data: {
+              userId: newUser.id,
+              telegramId: BigInt(tgUser.id),
+              username: tgUser.username || null,
+              firstName: tgUser.first_name || null,
+              lastName: tgUser.last_name || null,
+              chatId: BigInt(ctx.chat.id),
+            },
+            include: { user: { include: { subscriptions: true } } },
+          });
+        }
+
+        const accessLabel = dbTgUser.user.accessType === 'PREMIUM' ? '💎 PREMIUM' : 'FREE';
+
+        const welcomeText = `Welcome ${username} 👋\n\nYou are now connected to Hikima X10 AI.\n\n24/7 multi-market analysis.\nReal-time market intelligence.\nMulti-strategy signals.\nAutomatic signal monitoring.\n\nAccess: ${accessLabel}\n\nChoose an option below.`;
+
+        const keyboard = Markup.inlineKeyboard([
+          [Markup.button.callback('📊 Signals', 'menu_signals'), Markup.button.callback('📈 Markets', 'menu_markets')],
+          [Markup.button.callback('🧠 Strategies', 'menu_strategies'), Markup.button.callback('💎 Premium', 'menu_subscribe')],
+          [Markup.button.callback('📊 Performance', 'menu_performance'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
+          [Markup.button.callback('❓ Help & Support', 'menu_help')],
+        ]);
+
+        await ctx.reply(welcomeText, keyboard);
+      } catch (err) {
+        console.error('Error in /start handler:', err);
+        await ctx.reply('Welcome to Hikima X10 AI! Please select an option from the menu.');
       }
-
-      const accessLabel = dbTgUser.user.accessType === 'PREMIUM' ? '💎 PREMIUM' : 'FREE';
-
-      const welcomeText = `Welcome ${username} 👋\n\nYou are now connected to Hikima X10 AI.\n\n24/7 multi-market analysis.\nReal-time market intelligence.\nMulti-strategy signals.\nAutomatic signal monitoring.\n\nAccess: ${accessLabel}\n\nChoose an option below.`;
-
-      const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('📊 Signals', 'menu_signals'), Markup.button.callback('📈 Markets', 'menu_markets')],
-        [Markup.button.callback('🧠 Strategies', 'menu_strategies'), Markup.button.callback('💎 Premium', 'menu_subscribe')],
-        [Markup.button.callback('📊 Performance', 'menu_performance'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
-        [Markup.button.callback('❓ Help & Support', 'menu_help')],
-      ]);
-
-      await ctx.reply(welcomeText, keyboard);
     });
 
-    // 2. Commands: /menu, /status, /signals, /markets, /strategies, /settings, /performance, /subscription, /subscribe, /help, /support, /stop
+    // 2. Commands
     this.bot.command(['menu', 'signals', 'markets', 'strategies', 'settings', 'performance', 'subscription', 'subscribe', 'help', 'support', 'status', 'stop'], async (ctx) => {
       const command = ctx.message.text.split(' ')[0].replace('/', '');
 
@@ -90,16 +103,38 @@ export class TelegramBotService {
     });
 
     // 3. Callback Actions for Main Menu
-    this.bot.action('menu_signals', (ctx) => this.renderSignals(ctx));
-    this.bot.action('menu_markets', (ctx) => this.renderMarkets(ctx));
-    this.bot.action('menu_strategies', (ctx) => this.renderStrategies(ctx));
-    this.bot.action('menu_subscribe', (ctx) => this.renderSubscription(ctx));
-    this.bot.action('menu_performance', (ctx) => this.renderPerformance(ctx));
-    this.bot.action('menu_settings', (ctx) => this.renderSettings(ctx));
-    this.bot.action('menu_help', (ctx) => this.renderHelp(ctx));
+    this.bot.action('menu_signals', async (ctx) => {
+      await ctx.answerCbQuery();
+      await this.renderSignals(ctx);
+    });
+    this.bot.action('menu_markets', async (ctx) => {
+      await ctx.answerCbQuery();
+      await this.renderMarkets(ctx);
+    });
+    this.bot.action('menu_strategies', async (ctx) => {
+      await ctx.answerCbQuery();
+      await this.renderStrategies(ctx);
+    });
+    this.bot.action('menu_subscribe', async (ctx) => {
+      await ctx.answerCbQuery();
+      await this.renderSubscription(ctx);
+    });
+    this.bot.action('menu_performance', async (ctx) => {
+      await ctx.answerCbQuery();
+      await this.renderPerformance(ctx);
+    });
+    this.bot.action('menu_settings', async (ctx) => {
+      await ctx.answerCbQuery();
+      await this.renderSettings(ctx);
+    });
+    this.bot.action('menu_help', async (ctx) => {
+      await ctx.answerCbQuery();
+      await this.renderHelp(ctx);
+    });
 
     // 4. CryptoMus Payment Invoice Callbacks (buy_MONTHLY, buy_YEARLY, buy_ELITE)
     this.bot.action(/^buy_(MONTHLY|YEARLY|ELITE)$/, async (ctx) => {
+      await ctx.answerCbQuery();
       const planCode = ctx.match[1];
       const tgUser = ctx.from;
 
@@ -115,7 +150,6 @@ export class TelegramBotService {
 
       const orderId = `HKM_${planCode}_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
 
-      // Save pending payment record in DB
       await prisma.payment.create({
         data: {
           userId: dbUser.userId,
@@ -128,19 +162,18 @@ export class TelegramBotService {
         },
       });
 
-      // Generate invoice via CryptoMus API
       const invoiceRes = await this.cryptomusService.createPaymentInvoice({
         amount: plan.priceUsd.toFixed(2),
         currency: 'USD',
         orderId,
         urlCallback: 'https://hikimax10.ai/api/v1/payments/webhook',
-        urlReturn: 'https://t.me/HikimaX10Bot',
+        urlReturn: 'https://t.me/HikimaAIbot',
       });
 
       const paymentUrl = invoiceRes.result?.url || 'https://pay.cryptomus.com';
 
       await ctx.reply(
-        `💳 PAYMENT INVOICE CREATED\n\nPlan: ${plan.name}\nAmount: $${plan.priceUsd.toFixed(2)} USD\nOrder ID: ${orderId}\n\nClick the link below to complete payment via CryptoMus:`,
+        `💳 PAYMENT INVOICE CREATED\n\nPlan: ${plan.name}\nAmount: $${plan.priceUsd.toFixed(2)} USD\nOrder ID: ${orderId}\n\nClick the button below to complete your payment via CryptoMus:`,
         Markup.inlineKeyboard([[Markup.button.url('🔒 Pay with Crypto (CryptoMus)', paymentUrl)]])
       );
     });
