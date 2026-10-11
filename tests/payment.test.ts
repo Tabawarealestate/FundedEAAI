@@ -39,7 +39,6 @@ describe('CryptoMus Payment Gateway & Subscription Engine Tests', () => {
   it('should handle webhook idempotency properly', async () => {
     const uniqueOrderId = `ORDER_IDEMPOTENT_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
 
-    // Create test user and plan
     const plan = await prisma.plan.findUnique({ where: { code: 'MONTHLY' } });
     expect(plan).toBeDefined();
 
@@ -72,14 +71,12 @@ describe('CryptoMus Payment Gateway & Subscription Engine Tests', () => {
 
     const sig = cryptomusService.generateSignature(mockPayload);
 
-    // First webhook call: Activates Premium
     const res1 = await webhookHandler.handleWebhook({ ...mockPayload, sign: sig }, sig);
     expect(res1.success).toBe(true);
 
     const updatedUser = await prisma.user.findUnique({ where: { id: user.id } });
     expect(updatedUser?.accessType).toBe('PREMIUM');
 
-    // Second duplicate webhook call: Idempotency check returns success without duplicate creation
     const res2 = await webhookHandler.handleWebhook({ ...mockPayload, sign: sig }, sig);
     expect(res2.success).toBe(true);
     expect(res2.message).toContain('Idempotency satisfied');

@@ -188,6 +188,12 @@ async function bootstrap() {
               continue;
             }
 
+            // Free User Asset Restriction: EURUSD & NZDUSD Only
+            const freeAllowedAssets = new Set(['EURUSD', 'NZDUSD']);
+            if (!isPremium && !freeAllowedAssets.has(sym.symbol)) {
+              continue; // Free users strictly receive EURUSD & NZDUSD signals
+            }
+
             // Custom Market Watchlist Filter for Premium users
             if (isPremium && tu.user.watchlist && tu.user.watchlist.length > 0) {
               const userSelectedSymbolIds = new Set(tu.user.watchlist.map((w) => w.symbolId));

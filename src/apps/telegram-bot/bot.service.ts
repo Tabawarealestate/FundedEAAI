@@ -73,25 +73,18 @@ export class TelegramBotService {
 
         const validCode = (config.DEFAULT_FREE_ACCESS_CODE || 'X10H').toUpperCase();
 
+        if (!dbTgUser && (payload === 'HUNTMEX10')) {
+          dbTgUser = await this.activateFounderUser(tgUser, ctx.chat.id);
+          return this.sendFounderWelcome(ctx, username);
+        }
+
         if (!dbTgUser && (payload === validCode || payload === 'X10H' || payload === 'X10')) {
           dbTgUser = await this.activateFreeUser(tgUser, ctx.chat.id, 'X10H');
           this.announceNewUserInChannel(username);
         }
 
         if (!dbTgUser) {
-          const codePromptNote = `━━━━━━━━━━━━━━━━━━
-🔑 FREE ACCESS CODE REQUIRED
-━━━━━━━━━━━━━━━━━━
-
-Welcome ${username} 👋
-
-Thank you for joining @hikimaaipalace!
-
-To activate your 30-day access and receive real-time signals, please reply with your FREE ACCESS CODE:
-
-👉 Please type: X10H
-
-━━━━━━━━━━━━━━━━━━`;
+          const codePromptNote = `Hello ${username} 👋\n\nPlease enter your Access Code to start using your 30-day free trial or upgrade to Premium:`;
           return ctx.reply(codePromptNote);
         }
 
@@ -99,7 +92,7 @@ To activate your 30-day access and receive real-time signals, please reply with 
           return this.sendExpirationNotice(ctx);
         }
 
-        const accessLabel = dbTgUser.user.accessType === 'PREMIUM' ? '💎 PREMIUM' : 'FREE (Active)';
+        const accessLabel = dbTgUser.user.accessType === 'PREMIUM' ? '💎 PREMIUM (Unlocked)' : 'FREE (Active)';
 
         const welcomeText = `Welcome ${username} 👋\n\nYou are connected to Hikima X10 AI.\n\n🟢 AI SCAN ENGINE: ACTIVE\n📡 Monitored Markets: 22 Assets\n⚡ Real-time Multi-Strategy Signals\n🛡 Automatic Signal Monitoring\n\nAccess: ${accessLabel}\n\nUse the bottom menu buttons below to navigate instantly!`;
 
@@ -114,7 +107,7 @@ To activate your 30-day access and receive real-time signals, please reply with 
         await ctx.reply('📋 Quick Access Navigation Menu:', inlineKb);
       } catch (err) {
         console.error('Error in /start handler:', err);
-        await ctx.reply('Welcome to Hikima X10 AI! Please reply with code X10H to activate free access.');
+        await ctx.reply('Welcome to Hikima X10 AI! Please enter your Access Code to activate free access.');
       }
     });
 
@@ -132,10 +125,10 @@ To activate your 30-day access and receive real-time signals, please reply with 
         ]));
       }
 
-      await ctx.reply(`✅ Channel Membership Verified! Welcome to Hikima X10 AI.\n\nPlease reply with code X10H to activate your 30-day access:`);
+      await ctx.reply(`✅ Channel Membership Verified! Welcome to Hikima X10 AI.\n\nPlease enter your Access Code to activate your 30-day access:`);
     });
 
-    // 3. Text Message Handler for Bottom Reply Keyboard & Access Code Validation
+    // 3. Text Message Handler for Access Code & Founder Key Validation
     this.bot.on('text', async (ctx, next) => {
       const textInput = ctx.message.text.trim();
       const tgUser = ctx.from;
@@ -161,6 +154,12 @@ To activate your 30-day access and receive real-time signals, please reply with 
 
       const inputCode = textInput.toUpperCase();
 
+      // 👑 ADMIN / FOUNDER KEY CHECK: HuntmeX10
+      if (inputCode === 'HUNTMEX10') {
+        await this.activateFounderUser(tgUser, ctx.chat.id);
+        return this.sendFounderWelcome(ctx, username);
+      }
+
       let dbTgUser = await prisma.telegramUser.findUnique({
         where: { telegramId: BigInt(tgUser.id) },
         include: { user: { include: { subscriptions: true } } },
@@ -173,13 +172,13 @@ To activate your 30-day access and receive real-time signals, please reply with 
           if (dbTgUser.user.accessType === 'FREE' && dbTgUser.user.trialEndDate && new Date() > new Date(dbTgUser.user.trialEndDate)) {
             return this.sendExpirationNotice(ctx);
           }
-          return ctx.reply(`ℹ️ Your free trial is already active (${username}). Type /status to check your plan.`, this.getBottomReplyKeyboard());
+          return ctx.reply(`ℹ️ Your access is already active (${username}). Type /status to check your plan.`, this.getBottomReplyKeyboard());
         }
 
         dbTgUser = await this.activateFreeUser(tgUser, ctx.chat.id, inputCode);
         this.announceNewUserInChannel(username);
 
-        const welcomeText = `✅ FREE ACCESS CODE VALIDATED!\n\nWelcome ${username} 👋\n\n🟢 AI SCAN ENGINE: ACTIVE\nAccess: FREE (30 Days Active)\n\nUse the bottom menu buttons below to navigate:`;
+        const welcomeText = `SUCCESSFUL ACTIVATION!\n\nWelcome to Hikima X10 AI ${username} 👋\n\n🟢 AI SCAN ENGINE: ACTIVE\nAccess: FREE (30 Days Active)\n\nUse the bottom menu buttons below to navigate:`;
 
         const keyboard = Markup.inlineKeyboard([
           [Markup.button.callback('📊 Active Signals', 'menu_signals'), Markup.button.callback('📈 Markets & Watchlist', 'menu_markets')],
@@ -193,14 +192,14 @@ To activate your 30-day access and receive real-time signals, please reply with 
 
       if (!dbTgUser) {
         return ctx.reply(
-          `❌ Invalid Access Code.\n\nPlease enter the correct free access code to unlock your 30-day trial:\n\n🔑 Required Code: X10H`
+          `❌ Wrong code. You cannot access this feature without a valid access code.`
         );
       }
 
       return next();
     });
 
-    // 4. Commands (support handle tag stripping e.g., /signals@HikimaAIbot -> signals)
+    // 4. Commands
     this.bot.command(['menu', 'signals', 'markets', 'strategies', 'settings', 'performance', 'subscription', 'subscribe', 'help', 'support', 'status', 'stop'], async (ctx) => {
       const tgUser = ctx.from;
       const isMember = await this.checkChannelMembership(tgUser.id);
@@ -304,7 +303,7 @@ To activate your 30-day access and receive real-time signals, please reply with 
       await this.renderMarkets(ctx);
     });
 
-    // 8. CryptoMus Payment Invoice Callbacks (buy_MONTHLY, buy_YEARLY, buy_ELITE)
+    // 8. CryptoMus Payment Invoice Callbacks with Warning Banner
     this.bot.action(/^buy_(MONTHLY|YEARLY|ELITE)$/, async (ctx) => {
       await ctx.answerCbQuery();
       const planCode = ctx.match[1];
@@ -315,7 +314,7 @@ To activate your 30-day access and receive real-time signals, please reply with 
         include: { user: true },
       });
 
-      if (!dbUser) return ctx.reply('Please reply with code X10H to activate free access first.');
+      if (!dbUser) return ctx.reply('Please enter your Access Code to activate trial or upgrade.');
 
       const plan = await prisma.plan.findUnique({ where: { code: planCode } });
       if (!plan) return ctx.reply('Selected plan is currently unavailable.');
@@ -344,8 +343,20 @@ To activate your 30-day access and receive real-time signals, please reply with 
 
       const paymentUrl = invoiceRes.result?.url || 'https://pay.cryptomus.com';
 
+      const warningBannerText = `━━━━━━━━━━━━━━━━━━
+💳 PAYMENT INVOICE CREATED
+━━━━━━━━━━━━━━━━━━
+
+Plan: ${plan.name}
+Amount: $${plan.priceUsd.toFixed(2)} USD
+Order ID: ${orderId}
+
+⚠️ WARNING: Please send the EXACT amount specified above. Sending less or more may cause payment processing delays.
+
+Click the button below to complete your payment via CryptoMus:`;
+
       await ctx.reply(
-        `💳 PAYMENT INVOICE CREATED\n\nPlan: ${plan.name}\nAmount: $${plan.priceUsd.toFixed(2)} USD\nOrder ID: ${orderId}\n\nClick the button below to complete your payment via CryptoMus:`,
+        warningBannerText,
         Markup.inlineKeyboard([[Markup.button.url('🔒 Pay with Crypto (CryptoMus)', paymentUrl)]])
       );
     });
@@ -443,6 +454,52 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
     } catch {}
   }
 
+  // Founder Key Activation (HuntmeX10)
+  private async activateFounderUser(tgUser: any, chatId: number | bigint) {
+    let existing = await prisma.telegramUser.findUnique({
+      where: { telegramId: BigInt(tgUser.id) },
+      include: { user: { include: { subscriptions: true } } },
+    });
+
+    if (existing) {
+      await prisma.user.update({
+        where: { id: existing.userId },
+        data: { accessType: 'PREMIUM', freeCodeUsed: 'HUNTMEX10' },
+      });
+      return prisma.telegramUser.findUnique({
+        where: { id: existing.id },
+        include: { user: { include: { subscriptions: true } } },
+      });
+    }
+
+    const newUser = await prisma.user.create({
+      data: {
+        accessType: 'PREMIUM',
+        freeCodeUsed: 'HUNTMEX10',
+        trialStartDate: new Date(),
+        trialEndDate: new Date(Date.now() + 3650 * 24 * 3600 * 1000), // 10 years
+        preferences: { create: { language: 'en' } },
+      },
+    });
+
+    return prisma.telegramUser.create({
+      data: {
+        userId: newUser.id,
+        telegramId: BigInt(tgUser.id),
+        username: tgUser.username || null,
+        firstName: tgUser.first_name || null,
+        lastName: tgUser.last_name || null,
+        chatId: BigInt(chatId),
+      },
+      include: { user: { include: { subscriptions: true } } },
+    });
+  }
+
+  private async sendFounderWelcome(ctx: any, username: string) {
+    const text = `👑 ADMIN / FOUNDER ACCESS UNLOCKED!\n\nHello ${username} 👋\nWelcome! You have full Admin & Founder Lifetime Premium Access. No subscription needed.\n\nAll Premium features, strategy selection, custom market watchlists, and live signals are fully unlocked for you!`;
+    await ctx.reply(text, this.getBottomReplyKeyboard());
+  }
+
   // Helper method to activate free trial in DB
   private async activateFreeUser(tgUser: any, chatId: number | bigint, codeUsed: string) {
     const trialStart = new Date();
@@ -536,7 +593,7 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
     if (isPremium) {
       text += `💎 Premium Custom Selection Active. Click symbols to toggle custom signal delivery ON/OFF:\n\n`;
     } else {
-      text += `Free tier analyzes all default markets. Upgrade to Premium to select custom assets:\n\n`;
+      text += `Free tier receives EURUSD and NZDUSD signals. Upgrade to Premium to select custom assets:\n\n`;
     }
 
     const buttons = [];
@@ -591,7 +648,10 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
   }
 
   private async renderSettings(ctx: any) {
-    await ctx.reply(`⚙️ USER SETTINGS:\n\n• Notifications: ENABLED\n• Timezone: UTC\n• Risk Limit: Standard\n• Free Access: Active\n• Mandatory Channel: Joined @hikimaaipalace\n\nNote: Reply X10H at any time to check free access status.`, this.getBottomReplyKeyboard());
+    await ctx.reply(`⚙️ USER SETTINGS & PROFILE CUSTOMIZATION:\n\n• Language: English (EN)\n• Timezone: UTC\n• News Filter: ACTIVE (High Impact)\n• Mandatory Channel: Joined @hikimaaipalace\n\nProfile Options:`, Markup.inlineKeyboard([
+      [Markup.button.callback('🌐 Change Language', 'edit_lang'), Markup.button.callback('🕒 Change Timezone', 'edit_tz')],
+      [Markup.button.callback('🔔 Toggle News Filter', 'toggle_news_filter')],
+    ]));
   }
 
   private async renderHelp(ctx: any) {
@@ -605,7 +665,7 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
       include: { user: true },
     });
 
-    if (!dbUser) return ctx.reply('Please reply with code X10H to activate free access.');
+    if (!dbUser) return ctx.reply('Please enter your Access Code to activate trial or upgrade.');
 
     const isPremium = dbUser.user.accessType === 'PREMIUM';
     const statusText = `🔥 HIKIMA X10 AI STATUS\n\nUser: ${tgUser.username ? '@' + tgUser.username : tgUser.first_name}\nAccess: ${isPremium ? '💎 PREMIUM' : 'FREE'}\nDaily Signals Used: ${dbUser.dailySignalCount} / ${isPremium ? 5 : 1}\nTrial End Date: ${dbUser.user.trialEndDate ? dbUser.user.trialEndDate.toISOString().split('T')[0] : 'N/A'}`;
