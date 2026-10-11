@@ -257,7 +257,7 @@ export class TelegramBotService {
       return next();
     });
 
-    // 5. Commands (/scan added)
+    // 5. Commands
     this.bot.command(['menu', 'signals', 'markets', 'strategies', 'settings', 'performance', 'subscription', 'subscribe', 'help', 'support', 'status', 'scan', 'stop'], async (ctx) => {
       const tgUser = ctx.from;
       const isMember = await this.checkChannelMembership(tgUser.id);
@@ -320,14 +320,14 @@ export class TelegramBotService {
       await this.renderScanStatus(ctx);
     });
 
-    // 7. Watchlist Category Selection Actions
+    // 7. Watchlist Category Selection Actions (Crypto, Forex, Metals, Commodities, Indices, Stocks)
     this.bot.action(/^cat_(FOREX|CRYPTO|METALS|COMMODITIES|INDICES|STOCKS)$/, async (ctx) => {
       const category = ctx.match[1];
       await ctx.answerCbQuery(`Category: ${category}`);
       await this.renderMarketsByCategory(ctx, category);
     });
 
-    // 8. Premium Watchlist Symbol Toggle Actions
+    // 8. Toggle Symbol Selection Action (Saves to DB Watchlist)
     this.bot.action(/^toggle_symbol_(.+)$/, async (ctx) => {
       const symbolCode = ctx.match[1];
       const tgUser = ctx.from;
@@ -337,10 +337,7 @@ export class TelegramBotService {
         include: { user: true },
       });
 
-      if (!dbUser || dbUser.user.accessType !== 'PREMIUM') {
-        await ctx.answerCbQuery('💎 Custom Market Selection is a Premium feature.');
-        return ctx.reply('💎 Custom market selection requires Premium access. Click Premium to upgrade.');
-      }
+      if (!dbUser) return ctx.reply('Please register first by entering your Access Code X10H.');
 
       const sym = await prisma.marketSymbol.findUnique({ where: { symbol: symbolCode } });
       if (!sym) return;
@@ -359,7 +356,7 @@ export class TelegramBotService {
         await ctx.answerCbQuery(`Added ${symbolCode} to custom watchlist`);
       }
 
-      await this.renderMarkets(ctx);
+      await this.renderMarketsByCategory(ctx, sym.category);
     });
 
     // 9. CryptoMus Payment Invoice Callbacks
@@ -420,9 +417,27 @@ Click the button below to complete your payment via CryptoMus:`;
       );
     });
 
-    // 10. Strategy Selection Action
+    // 10. Strategy Selection Action (Saves preferred strategy in DB)
     this.bot.action(/^select_strat_(.+)$/, async (ctx) => {
       const stratCode = ctx.match[1];
+      const tgUser = ctx.from;
+
+      const dbUser = await prisma.telegramUser.findUnique({
+        where: { telegramId: BigInt(tgUser.id) },
+        include: { user: true },
+      });
+
+      if (dbUser) {
+        const strat = await prisma.strategy.findFirst({ where: { code: stratCode } });
+        if (strat) {
+          await prisma.userStrategy.upsert({
+            where: { userId_strategyId: { userId: dbUser.userId, strategyId: strat.id } },
+            update: { isSelected: true },
+            create: { userId: dbUser.userId, strategyId: strat.id, isSelected: true },
+          });
+        }
+      }
+
       await ctx.answerCbQuery(`Selected Strategy: ${stratCode}`);
       await ctx.reply(`✅ Preferred Strategy updated to: ${stratCode}. Saved to your profile.`);
     });
