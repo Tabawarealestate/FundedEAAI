@@ -56,21 +56,25 @@ function requireAdminRole(roles: string[] = []) {
   };
 }
 
-// 1. Health Check
+// 1. Production Health Check Endpoint (Task 3)
 app.get('/api/v1/health', async (req, res) => {
   try {
     await prisma.$queryRaw`SELECT 1`;
-    res.json({
-      status: 'ONLINE',
-      timestamp: new Date(),
-      services: {
-        database: 'ONLINE',
-        telegram: 'ONLINE',
-        marketData: 'ONLINE',
-      },
+    res.status(200).json({
+      status: 'ok',
+      service: 'hikima-x10-ai',
+      telegram: config.TELEGRAM_BOT_TOKEN ? 'connected' : 'disabled',
+      database: 'connected',
+      timestamp: new Date().toISOString(),
     });
-  } catch {
-    res.status(500).json({ status: 'DEGRADED', database: 'OFFLINE' });
+  } catch (err) {
+    res.status(503).json({
+      status: 'degraded',
+      service: 'hikima-x10-ai',
+      telegram: config.TELEGRAM_BOT_TOKEN ? 'connected' : 'disabled',
+      database: 'disconnected',
+      timestamp: new Date().toISOString(),
+    });
   }
 });
 
@@ -133,7 +137,6 @@ app.post('/api/v1/payments/webhook', async (req, res) => {
 app.post('/api/v1/backtest', async (req, res) => {
   const { symbol = 'EURUSD', timeframe = 'M15', initialBalance = 10000 } = req.body;
 
-  // Fetch real candles from provider
   const realCandles = await marketDataProvider.fetchCandles(symbol, timeframe, 150);
 
   if (realCandles.length < 50) {

@@ -8,6 +8,53 @@ import { SignalDeduplicationService } from './services/signal-engine/deduplicati
 import { config } from './config';
 import { prisma, seedInitialData } from './database';
 
+let botService: TelegramBotService | null = null;
+let monitoringInterval: NodeJS.Timeout | null = null;
+let scannerInterval: NodeJS.Timeout | null = null;
+
+// Concurrency Guards
+let isMonitoring = false;
+let isScanning = false;
+
+// Task 5: Global Process Exception Safety
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('⚠️ [PROCESS] Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('⚠️ [PROCESS] Uncaught Exception:', error);
+});
+
+// Task 4: Graceful Shutdown Function
+async function gracefulShutdown(signal: string) {
+  console.log(`\n🛑 [SHUTDOWN] Received ${signal}. Initiating production-safe graceful shutdown...`);
+
+  if (monitoringInterval) clearInterval(monitoringInterval);
+  if (scannerInterval) clearInterval(scannerInterval);
+
+  if (botService) {
+    try {
+      console.log('🤖 [SHUTDOWN] Stopping Telegram polling bot...');
+      botService.bot.stop(signal);
+    } catch (err) {
+      console.error('⚠️ [SHUTDOWN] Telegram bot stop error:', err);
+    }
+  }
+
+  try {
+    console.log('🗄 [SHUTDOWN] Disconnecting Prisma PostgreSQL client...');
+    await prisma.$disconnect();
+  } catch (err) {
+    console.error('⚠️ [SHUTDOWN] Prisma disconnect error:', err);
+  }
+
+  console.log('✅ [SHUTDOWN] Graceful shutdown complete. Exiting.');
+  process.exit(0);
+}
+
+process.once('SIGINT', () => gracefulShutdown('SIGINT'));
+process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
+
 async function bootstrap() {
   console.log('🚀 Initializing Hikima X10 AI Platform...');
 
@@ -31,8 +78,7 @@ async function bootstrap() {
     console.log(`🌐 Hikima X10 AI Server listening on port ${config.PORT} [${config.NODE_ENV}]`);
   });
 
-  // 4. Launch Telegram Bot Service with Fast Optimized Long Polling
-  let botService: TelegramBotService | null = null;
+  // 4. Launch Single Telegram Bot Instance with Long Polling (Task 6)
   const botToken = config.TELEGRAM_BOT_TOKEN;
 
   if (botToken) {
@@ -52,12 +98,14 @@ async function bootstrap() {
     }
   }
 
-  // Graceful termination
-  process.once('SIGINT', () => botService?.bot.stop('SIGINT'));
-  process.once('SIGTERM', () => botService?.bot.stop('SIGTERM'));
+  // 5. Start Background Signal Monitoring Worker Loop with Concurrency Guard (Task 5)
+  monitoringInterval = setInterval(async () => {
+    if (isMonitoring) {
+      console.log('⏳ [MONITOR] Previous monitoring cycle still running. Skipping overlapping cycle.');
+      return;
+    }
 
-  // 5. Start Background Signal Monitoring Worker Loop (Runs every 15s)
-  setInterval(async () => {
+    isMonitoring = true;
     try {
       const events = await monitoringWorker.checkActiveSignals();
       for (const ev of events) {
@@ -71,11 +119,19 @@ async function bootstrap() {
       }
     } catch (err) {
       console.error('⚠️ Signal monitoring worker error:', err);
+    } finally {
+      isMonitoring = false;
     }
   }, 15000);
 
-  // 6. Start Market Scanner Loop (Runs every 60s across supported watchlist symbols)
-  setInterval(async () => {
+  // 6. Start Market Scanner Loop with Concurrency Guard (Task 5)
+  scannerInterval = setInterval(async () => {
+    if (isScanning) {
+      console.log('⏳ [SCANNER] Previous scanning cycle still running. Skipping overlapping cycle.');
+      return;
+    }
+
+    isScanning = true;
     try {
       const symbols = await prisma.marketSymbol.findMany({ where: { isSupported: true } });
       for (const sym of symbols) {
@@ -188,12 +244,6 @@ async function bootstrap() {
               continue;
             }
 
-            // Free User Asset Restriction: EURUSD & NZDUSD Only
-            const freeAllowedAssets = new Set(['EURUSD', 'NZDUSD']);
-            if (!isPremium && !freeAllowedAssets.has(sym.symbol)) {
-              continue; // Free users strictly receive EURUSD & NZDUSD signals
-            }
-
             // Custom Market Watchlist Filter for Premium users
             if (isPremium && tu.user.watchlist && tu.user.watchlist.length > 0) {
               const userSelectedSymbolIds = new Set(tu.user.watchlist.map((w) => w.symbolId));
@@ -226,6 +276,8 @@ async function bootstrap() {
       }
     } catch (err) {
       console.error('⚠️ Market scanner error:', err);
+    } finally {
+      isScanning = false;
     }
   }, 60000);
 }

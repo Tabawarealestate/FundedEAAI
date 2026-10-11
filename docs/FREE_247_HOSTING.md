@@ -21,11 +21,11 @@ Render offers a **100% Free Tier** for Web Services and PostgreSQL databases!
 5. Under **Environment Variables**, add:
    - `NODE_ENV` = `production`
    - `PORT` = `3000`
-   - `TELEGRAM_BOT_TOKEN` = `8991582006:AAFA7EEdkW4JNPIn20f9M_Lm6iJbrwxt8_w`
-   - `TELEGRAM_ADMIN_CHAT_ID` = `8845793711`
-   - `TWELVE_DATA_API_KEY` = `1205b6ecb0354aeaab07424aad620208`
-   - `CRYPTOMUS_MERCHANT_ID` = `42dbf38d-8ed8-4c4b-9ac6-6fba2e2a9732`
-   - `CRYPTOMUS_API_KEY` = `f1f1c0aa08807ea6ec704a459f85b0078e7b6b3d`
+   - `TELEGRAM_BOT_TOKEN` = (Your Telegram Bot Token)
+   - `TELEGRAM_ADMIN_CHAT_ID` = (Your Telegram Admin Chat ID)
+   - `TWELVE_DATA_API_KEY` = (Your TwelveData API Key)
+   - `CRYPTOMUS_MERCHANT_ID` = (Your CryptoMus Merchant ID)
+   - `CRYPTOMUS_API_KEY` = (Your CryptoMus API Key)
    - `DEFAULT_FREE_ACCESS_CODE` = `X10H`
    - `DATABASE_URL` = (Paste your free PostgreSQL connection URL from Render Free Postgres or Supabase).
 

@@ -10,17 +10,17 @@ services:
       - key: PORT
         value: 3000
       - key: TELEGRAM_BOT_TOKEN
-        value: 8991582006:AAFA7EEdkW4JNPIn20f9M_Lm6iJbrwxt8_w
+        sync: false
       - key: TELEGRAM_ADMIN_CHAT_ID
-        value: 8845793711
+        sync: false
       - key: MARKET_DATA_API_KEY
-        value: 1205b6ecb0354aeaab07424aad620208
+        sync: false
       - key: TWELVE_DATA_API_KEY
-        value: 1205b6ecb0354aeaab07424aad620208
+        sync: false
       - key: CRYPTOMUS_MERCHANT_ID
-        value: 42dbf38d-8ed8-4c4b-9ac6-6fba2e2a9732
+        sync: false
       - key: CRYPTOMUS_API_KEY
-        value: f1f1c0aa08807ea6ec704a459f85b0078e7b6b3d
+        sync: false
       - key: DEFAULT_FREE_ACCESS_CODE
         value: X10H
       - key: DATABASE_URL

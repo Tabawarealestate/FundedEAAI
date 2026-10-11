@@ -12,7 +12,7 @@ describe('Admin API, RBAC & Backtesting Engine Tests', () => {
   beforeAll(async () => {
     // Create super admin user in DB
     const passwordHash = bcrypt.hashSync('super_secret_password', 10);
-    const admin = await prisma.adminUser.upsert({
+    await prisma.adminUser.upsert({
       where: { username: 'admin_test' },
       update: { passwordHash },
       create: {
@@ -37,10 +37,12 @@ describe('Admin API, RBAC & Backtesting Engine Tests', () => {
     await prisma.$disconnect();
   });
 
-  it('should return 200 OK for health check endpoint', async () => {
+  it('should return 200 OK for health check endpoint matching Task 3 spec', async () => {
     const res = await request(app).get('/api/v1/health');
     expect(res.status).toBe(200);
-    expect(res.body.status).toBe('ONLINE');
+    expect(res.body.status).toBe('ok');
+    expect(res.body.service).toBe('hikima-x10-ai');
+    expect(res.body.database).toBe('connected');
   });
 
   it('should require authorization token for admin endpoints', async () => {
