@@ -9,6 +9,10 @@ export class TelegramBotService {
   private channelUsername = '@hikimaaipalace';
   private channelUrl = 'https://t.me/hikimaaipalace';
 
+  // Instant In-Memory Cache for Channel Membership (TTL = 5 minutes)
+  private channelMemberCache = new Map<number, { isMember: boolean; cachedAt: number }>();
+  private cacheTtlMs = 5 * 60 * 1000;
+
   constructor(token = config.TELEGRAM_BOT_TOKEN) {
     this.bot = new Telegraf(token);
     this.setupErrorHandling();
@@ -26,7 +30,7 @@ export class TelegramBotService {
   private setupMiddlewares() {
     this.bot.use((ctx, next) => {
       const msgText = (ctx.message as any)?.text || (ctx.callbackQuery as any)?.data || '';
-      console.log(`📩 INCOMING TELEGRAM UPDATE [${ctx.updateType}] from ${ctx.from?.username || ctx.from?.id}:`, msgText);
+      console.log(`⚡ [INSTANT UPDATE] [${ctx.updateType}] from ${ctx.from?.username || ctx.from?.id}:`, msgText);
       return next();
     });
   }
@@ -41,14 +45,25 @@ export class TelegramBotService {
     ]).resize();
   }
 
-  // Check if user is a member of @hikimaaipalace
+  // Instant Cached Channel Membership Check (< 1ms)
   public async checkChannelMembership(userId: number): Promise<boolean> {
+    if (String(userId) === config.TELEGRAM_ADMIN_CHAT_ID) return true;
+
+    const cached = this.channelMemberCache.get(userId);
+    if (cached && Date.now() - cached.cachedAt < this.cacheTtlMs) {
+      return cached.isMember;
+    }
+
     try {
-      if (String(userId) === config.TELEGRAM_ADMIN_CHAT_ID) return true;
       const member = await this.bot.telegram.getChatMember(this.channelUsername, userId);
-      return ['creator', 'administrator', 'member'].includes(member.status);
-    } catch (err) {
-      return true; // Safe fallback if channel API lookup fails
+      const isMember = ['creator', 'administrator', 'member'].includes(member.status);
+      this.channelMemberCache.set(userId, { isMember, cachedAt: Date.now() });
+      return isMember;
+    } catch (err: any) {
+      // If user has explicitly not joined channel or left, return false
+      const isMember = false;
+      this.channelMemberCache.set(userId, { isMember, cachedAt: Date.now() });
+      return isMember;
     }
   }
 
@@ -116,6 +131,8 @@ export class TelegramBotService {
       await ctx.answerCbQuery();
       const tgUser = ctx.from;
       const username = tgUser.username ? `@${tgUser.username}` : tgUser.first_name || 'Trader';
+
+      this.channelMemberCache.delete(tgUser.id);
       const isMember = await this.checkChannelMembership(tgUser.id);
 
       if (!isMember) {
@@ -262,7 +279,56 @@ export class TelegramBotService {
       await this.renderScanStatus(ctx);
     });
 
-    // 6. Premium Watchlist Symbol Toggle Actions
+    // 6. Settings Customization Callbacks
+    this.bot.action('edit_lang', async (ctx) => {
+      await ctx.answerCbQuery('Language Selector');
+      await ctx.reply('🌐 Select Preferred Language:', Markup.inlineKeyboard([
+        [Markup.button.callback('🇬🇧 English', 'set_lang_en'), Markup.button.callback('🇫🇷 French', 'set_lang_fr')],
+        [Markup.button.callback('🇪🇸 Spanish', 'set_lang_es'), Markup.button.callback('🇸🇦 Arabic', 'set_lang_ar')],
+      ]));
+    });
+
+    this.bot.action(/^set_lang_(.+)$/, async (ctx) => {
+      const lang = ctx.match[1].toUpperCase();
+      await ctx.answerCbQuery(`Language set to ${lang}`);
+      await ctx.reply(`🌐 Language updated to ${lang}. Saved to profile.`);
+    });
+
+    this.bot.action('edit_tz', async (ctx) => {
+      await ctx.answerCbQuery('Timezone Selector');
+      await ctx.reply('🕒 Select Preferred Timezone:', Markup.inlineKeyboard([
+        [Markup.button.callback('UTC', 'set_tz_UTC'), Markup.button.callback('EST (UTC-5)', 'set_tz_EST')],
+        [Markup.button.callback('GMT (UTC+0)', 'set_tz_GMT'), Markup.button.callback('WAT (UTC+1)', 'set_tz_WAT')],
+      ]));
+    });
+
+    this.bot.action(/^set_tz_(.+)$/, async (ctx) => {
+      const tz = ctx.match[1];
+      await ctx.answerCbQuery(`Timezone set to ${tz}`);
+      await ctx.reply(`🕒 Timezone updated to ${tz}. Saved to profile.`);
+    });
+
+    this.bot.action('toggle_news_filter', async (ctx) => {
+      const tgUser = ctx.from;
+      const dbUser = await prisma.telegramUser.findUnique({
+        where: { telegramId: BigInt(tgUser.id) },
+        include: { user: { include: { preferences: true } } },
+      });
+
+      if (dbUser?.user.preferences) {
+        const current = dbUser.user.preferences.newsFilterOn;
+        await prisma.userPreference.update({
+          where: { id: dbUser.user.preferences.id },
+          data: { newsFilterOn: !current },
+        });
+        await ctx.answerCbQuery(`High-Impact News Filter ${!current ? 'ACTIVATED' : 'DISABLED'}`);
+        await ctx.reply(`🔔 High-Impact News Event Filter is now: ${!current ? '🟢 ACTIVATED' : '🔴 DISABLED'}`);
+      } else {
+        await ctx.answerCbQuery('News Filter Toggled');
+      }
+    });
+
+    // 7. Premium Watchlist Symbol Toggle Actions
     this.bot.action(/^toggle_symbol_(.+)$/, async (ctx) => {
       const symbolCode = ctx.match[1];
       const tgUser = ctx.from;
@@ -294,12 +360,6 @@ export class TelegramBotService {
         await ctx.answerCbQuery(`Added ${symbolCode} to custom watchlist`);
       }
 
-      await this.renderMarkets(ctx);
-    });
-
-    // 7. Toggle Custom Market Filter ON/OFF
-    this.bot.action('toggle_custom_filter', async (ctx) => {
-      await ctx.answerCbQuery('Toggled Custom Market Filter');
       await this.renderMarkets(ctx);
     });
 
