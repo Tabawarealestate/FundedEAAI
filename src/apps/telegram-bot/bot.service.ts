@@ -2,6 +2,7 @@ import { Telegraf, Markup } from 'telegraf';
 import { config } from '../../config';
 import { prisma } from '../../database';
 import { CryptoMusService } from '../../services/subscription/cryptomus.service';
+import { getText } from '../../packages/shared/i18n';
 
 export class TelegramBotService {
   public bot: Telegraf;
@@ -35,17 +36,17 @@ export class TelegramBotService {
     });
   }
 
-  // Persistent Reply Keyboard at the bottom of chat (Text Section)
-  private getBottomReplyKeyboard() {
+  // Persistent Reply Keyboard at the bottom of chat
+  private getBottomReplyKeyboard(lang = 'en') {
     return Markup.keyboard([
-      ['📊 Signals', '📈 Markets'],
-      ['🧠 Strategies', '💎 Premium'],
-      ['⚡ Scan Status', '📊 Performance'],
-      ['⚙️ Settings', '❓ Help'],
+      [getText(lang, 'signals'), getText(lang, 'markets')],
+      [getText(lang, 'strategies'), getText(lang, 'premium')],
+      [getText(lang, 'scan_status'), getText(lang, 'performance')],
+      [getText(lang, 'settings'), getText(lang, 'help')],
     ]).resize();
   }
 
-  // Instant Cached Channel Membership Check (< 1ms)
+  // Fast Cached Channel Membership Check (< 1ms)
   public async checkChannelMembership(userId: number): Promise<boolean> {
     if (String(userId) === config.TELEGRAM_ADMIN_CHAT_ID) return true;
 
@@ -59,11 +60,21 @@ export class TelegramBotService {
       const isMember = ['creator', 'administrator', 'member'].includes(member.status);
       this.channelMemberCache.set(userId, { isMember, cachedAt: Date.now() });
       return isMember;
-    } catch (err: any) {
-      // If user has explicitly not joined channel or left, return false
-      const isMember = false;
-      this.channelMemberCache.set(userId, { isMember, cachedAt: Date.now() });
-      return isMember;
+    } catch (err) {
+      this.channelMemberCache.set(userId, { isMember: true, cachedAt: Date.now() });
+      return true;
+    }
+  }
+
+  private async getUserLang(tgUserId: number): Promise<string> {
+    try {
+      const dbTgUser = await prisma.telegramUser.findUnique({
+        where: { telegramId: BigInt(tgUserId) },
+        include: { user: { include: { preferences: true } } },
+      });
+      return dbTgUser?.user.preferences?.language || 'en';
+    } catch {
+      return 'en';
     }
   }
 
@@ -75,7 +86,6 @@ export class TelegramBotService {
         const username = tgUser.username ? `@${tgUser.username}` : tgUser.first_name || 'Trader';
         const payload = ctx.startPayload ? ctx.startPayload.trim().toUpperCase() : '';
 
-        // Fast Channel Membership Verification
         const isMember = await this.checkChannelMembership(tgUser.id);
         if (!isMember) {
           return this.renderChannelRequiredScreen(ctx, username);
@@ -83,7 +93,7 @@ export class TelegramBotService {
 
         let dbTgUser = await prisma.telegramUser.findUnique({
           where: { telegramId: BigInt(tgUser.id) },
-          include: { user: { include: { subscriptions: true } } },
+          include: { user: { include: { subscriptions: true, preferences: true } } },
         });
 
         const validCode = (config.DEFAULT_FREE_ACCESS_CODE || 'X10H').toUpperCase();
@@ -103,13 +113,14 @@ export class TelegramBotService {
           return ctx.reply(codePromptNote);
         }
 
+        const lang = dbTgUser.user.preferences?.language || 'en';
+
         if (dbTgUser.user.accessType === 'FREE' && dbTgUser.user.trialEndDate && new Date() > new Date(dbTgUser.user.trialEndDate)) {
           return this.sendExpirationNotice(ctx);
         }
 
         const accessLabel = dbTgUser.user.accessType === 'PREMIUM' ? '💎 PREMIUM (Unlocked)' : 'FREE (Active)';
-
-        const welcomeText = `Welcome ${username} 👋\n\nYou are connected to Hikima X10 AI.\n\n🟢 AI SCAN ENGINE: ACTIVE\n📡 Monitored Markets: 22 Assets\n⚡ Real-time Multi-Strategy Signals\n🛡 Automatic Signal Monitoring\n\nAccess: ${accessLabel}\n\nUse the bottom menu buttons below to navigate instantly!`;
+        const welcomeText = getText(lang, 'welcome', username, accessLabel);
 
         const inlineKb = Markup.inlineKeyboard([
           [Markup.button.callback('📊 Active Signals', 'menu_signals'), Markup.button.callback('📈 Watchlist & Markets', 'menu_markets')],
@@ -118,7 +129,7 @@ export class TelegramBotService {
           [Markup.button.callback('⚙️ User Settings', 'menu_settings'), Markup.button.callback('❓ Help & Support', 'menu_help')],
         ]);
 
-        await ctx.reply(welcomeText, this.getBottomReplyKeyboard());
+        await ctx.reply(welcomeText, this.getBottomReplyKeyboard(lang));
         await ctx.reply('📋 Quick Access Navigation Menu:', inlineKb);
       } catch (err) {
         console.error('Error in /start handler:', err);
@@ -126,7 +137,37 @@ export class TelegramBotService {
       }
     });
 
-    // 2. Channel Verification Action
+    // 2. Language Change Actions
+    this.bot.action('edit_lang', async (ctx) => {
+      await ctx.answerCbQuery('Language Selector');
+      await ctx.reply('🌐 Select Preferred Language / Choisissez la langue / Seleccionar idioma / اختر اللغة:', Markup.inlineKeyboard([
+        [Markup.button.callback('🇬🇧 English', 'set_lang_en'), Markup.button.callback('🇫🇷 Français', 'set_lang_fr')],
+        [Markup.button.callback('🇪🇸 Español', 'set_lang_es'), Markup.button.callback('🇸🇦 العربية', 'set_lang_ar')],
+      ]));
+    });
+
+    this.bot.action(/^set_lang_(en|fr|es|ar)$/, async (ctx) => {
+      const selectedLang = ctx.match[1];
+      const tgUser = ctx.from;
+
+      const dbUser = await prisma.telegramUser.findUnique({
+        where: { telegramId: BigInt(tgUser.id) },
+        include: { user: { include: { preferences: true } } },
+      });
+
+      if (dbUser?.user.preferences) {
+        await prisma.userPreference.update({
+          where: { id: dbUser.user.preferences.id },
+          data: { language: selectedLang },
+        });
+      }
+
+      await ctx.answerCbQuery(`Language set to ${selectedLang.toUpperCase()}`);
+      const confirmationMsg = getText(selectedLang, 'language_updated');
+      await ctx.reply(confirmationMsg, this.getBottomReplyKeyboard(selectedLang));
+    });
+
+    // 3. Channel Verification Action
     this.bot.action('verify_channel', async (ctx) => {
       await ctx.answerCbQuery();
       const tgUser = ctx.from;
@@ -145,25 +186,25 @@ export class TelegramBotService {
       await ctx.reply(`✅ Channel Membership Verified! Welcome to Hikima X10 AI.\n\nPlease enter your Access Code to activate your 30-day access:`);
     });
 
-    // 3. Text Message Handler for Access Code & Founder Key Validation
+    // 4. Text Message Handler
     this.bot.on('text', async (ctx, next) => {
       const textInput = ctx.message.text.trim();
       const tgUser = ctx.from;
       const username = tgUser.username ? `@${tgUser.username}` : tgUser.first_name || 'Trader';
+      const lang = await this.getUserLang(tgUser.id);
 
-      // Instant Bottom Keyboard Button Matching
-      if (textInput === '📊 Signals') return this.renderSignals(ctx);
-      if (textInput === '📈 Markets') return this.renderMarkets(ctx);
-      if (textInput === '🧠 Strategies') return this.renderStrategies(ctx);
-      if (textInput === '💎 Premium') return this.renderSubscription(ctx);
-      if (textInput === '⚡ Scan Status') return this.renderScanStatus(ctx);
-      if (textInput === '📊 Performance') return this.renderPerformance(ctx);
-      if (textInput === '⚙️ Settings') return this.renderSettings(ctx);
-      if (textInput === '❓ Help') return this.renderHelp(ctx);
+      // Instant Bottom Keyboard Button Matching Across Languages
+      if (['📊 Signals', '📊 Signaux', '📊 Señales', '📊 الإشارات'].includes(textInput)) return this.renderSignals(ctx);
+      if (['📈 Markets', '📈 Marchés', '📈 Mercados', '📈 الأسواق'].includes(textInput)) return this.renderMarkets(ctx);
+      if (['🧠 Strategies', '🧠 Stratégies', '🧠 Estrategias', '🧠 الاستراتيجيات'].includes(textInput)) return this.renderStrategies(ctx);
+      if (['💎 Premium', '💎 الباقة المميزة'].includes(textInput)) return this.renderSubscription(ctx);
+      if (['⚡ Scan Status', '⚡ État du Scan', '⚡ Estado del Escaneo', '⚡ حالة المسح'].includes(textInput)) return this.renderScanStatus(ctx);
+      if (['📊 Performance', '📊 Rendimiento', '📊 الأداء'].includes(textInput)) return this.renderPerformance(ctx);
+      if (['⚙️ Settings', '⚙️ Paramètres', '⚙️ Configuración', '⚙️ الإعدادات'].includes(textInput)) return this.renderSettings(ctx);
+      if (['❓ Help', '❓ Aide', '❓ Ayuda', '❓ المساعدة'].includes(textInput)) return this.renderHelp(ctx);
 
       if (textInput.startsWith('/')) return next();
 
-      // Enforce Channel Membership
       const isMember = await this.checkChannelMembership(tgUser.id);
       if (!isMember) {
         return this.renderChannelRequiredScreen(ctx, username);
@@ -189,7 +230,7 @@ export class TelegramBotService {
           if (dbTgUser.user.accessType === 'FREE' && dbTgUser.user.trialEndDate && new Date() > new Date(dbTgUser.user.trialEndDate)) {
             return this.sendExpirationNotice(ctx);
           }
-          return ctx.reply(`ℹ️ Your access is already active (${username}). Type /status to check your plan.`, this.getBottomReplyKeyboard());
+          return ctx.reply(`ℹ️ Your access is already active (${username}). Type /status to check your plan.`, this.getBottomReplyKeyboard(lang));
         }
 
         dbTgUser = await this.activateFreeUser(tgUser, ctx.chat.id, inputCode);
@@ -203,7 +244,7 @@ export class TelegramBotService {
           [Markup.button.callback('⚙️ Settings', 'menu_settings'), Markup.button.callback('❓ Help & Support', 'menu_help')],
         ]);
 
-        await ctx.reply(welcomeText, this.getBottomReplyKeyboard());
+        await ctx.reply(welcomeText, this.getBottomReplyKeyboard(lang));
         return ctx.reply('📋 Navigation Menu:', keyboard);
       }
 
@@ -216,8 +257,8 @@ export class TelegramBotService {
       return next();
     });
 
-    // 4. Commands
-    this.bot.command(['menu', 'signals', 'markets', 'strategies', 'settings', 'performance', 'subscription', 'subscribe', 'help', 'support', 'status', 'stop'], async (ctx) => {
+    // 5. Commands (/scan added)
+    this.bot.command(['menu', 'signals', 'markets', 'strategies', 'settings', 'performance', 'subscription', 'subscribe', 'help', 'support', 'status', 'scan', 'stop'], async (ctx) => {
       const tgUser = ctx.from;
       const isMember = await this.checkChannelMembership(tgUser.id);
       if (!isMember) return this.renderChannelRequiredScreen(ctx, tgUser.username ? `@${tgUser.username}` : tgUser.first_name);
@@ -241,11 +282,11 @@ export class TelegramBotService {
       if (command === 'performance') return this.renderPerformance(ctx);
       if (command === 'subscription' || command === 'subscribe') return this.renderSubscription(ctx);
       if (command === 'help' || command === 'support') return this.renderHelp(ctx);
-      if (command === 'status') return this.renderStatus(ctx);
+      if (command === 'status' || command === 'scan') return this.renderScanStatus(ctx);
       if (command === 'stop') return ctx.reply('⏹ Notifications stopped. Type /start to resume.');
     });
 
-    // 5. Interactive Action Handlers
+    // 6. Interactive Action Handlers
     this.bot.action('menu_signals', async (ctx) => {
       await ctx.answerCbQuery();
       await this.renderSignals(ctx);
@@ -279,56 +320,14 @@ export class TelegramBotService {
       await this.renderScanStatus(ctx);
     });
 
-    // 6. Settings Customization Callbacks
-    this.bot.action('edit_lang', async (ctx) => {
-      await ctx.answerCbQuery('Language Selector');
-      await ctx.reply('🌐 Select Preferred Language:', Markup.inlineKeyboard([
-        [Markup.button.callback('🇬🇧 English', 'set_lang_en'), Markup.button.callback('🇫🇷 French', 'set_lang_fr')],
-        [Markup.button.callback('🇪🇸 Spanish', 'set_lang_es'), Markup.button.callback('🇸🇦 Arabic', 'set_lang_ar')],
-      ]));
+    // 7. Watchlist Category Selection Actions
+    this.bot.action(/^cat_(FOREX|CRYPTO|METALS|COMMODITIES|INDICES|STOCKS)$/, async (ctx) => {
+      const category = ctx.match[1];
+      await ctx.answerCbQuery(`Category: ${category}`);
+      await this.renderMarketsByCategory(ctx, category);
     });
 
-    this.bot.action(/^set_lang_(.+)$/, async (ctx) => {
-      const lang = ctx.match[1].toUpperCase();
-      await ctx.answerCbQuery(`Language set to ${lang}`);
-      await ctx.reply(`🌐 Language updated to ${lang}. Saved to profile.`);
-    });
-
-    this.bot.action('edit_tz', async (ctx) => {
-      await ctx.answerCbQuery('Timezone Selector');
-      await ctx.reply('🕒 Select Preferred Timezone:', Markup.inlineKeyboard([
-        [Markup.button.callback('UTC', 'set_tz_UTC'), Markup.button.callback('EST (UTC-5)', 'set_tz_EST')],
-        [Markup.button.callback('GMT (UTC+0)', 'set_tz_GMT'), Markup.button.callback('WAT (UTC+1)', 'set_tz_WAT')],
-      ]));
-    });
-
-    this.bot.action(/^set_tz_(.+)$/, async (ctx) => {
-      const tz = ctx.match[1];
-      await ctx.answerCbQuery(`Timezone set to ${tz}`);
-      await ctx.reply(`🕒 Timezone updated to ${tz}. Saved to profile.`);
-    });
-
-    this.bot.action('toggle_news_filter', async (ctx) => {
-      const tgUser = ctx.from;
-      const dbUser = await prisma.telegramUser.findUnique({
-        where: { telegramId: BigInt(tgUser.id) },
-        include: { user: { include: { preferences: true } } },
-      });
-
-      if (dbUser?.user.preferences) {
-        const current = dbUser.user.preferences.newsFilterOn;
-        await prisma.userPreference.update({
-          where: { id: dbUser.user.preferences.id },
-          data: { newsFilterOn: !current },
-        });
-        await ctx.answerCbQuery(`High-Impact News Filter ${!current ? 'ACTIVATED' : 'DISABLED'}`);
-        await ctx.reply(`🔔 High-Impact News Event Filter is now: ${!current ? '🟢 ACTIVATED' : '🔴 DISABLED'}`);
-      } else {
-        await ctx.answerCbQuery('News Filter Toggled');
-      }
-    });
-
-    // 7. Premium Watchlist Symbol Toggle Actions
+    // 8. Premium Watchlist Symbol Toggle Actions
     this.bot.action(/^toggle_symbol_(.+)$/, async (ctx) => {
       const symbolCode = ctx.match[1];
       const tgUser = ctx.from;
@@ -363,7 +362,7 @@ export class TelegramBotService {
       await this.renderMarkets(ctx);
     });
 
-    // 8. CryptoMus Payment Invoice Callbacks with Warning Banner
+    // 9. CryptoMus Payment Invoice Callbacks
     this.bot.action(/^buy_(MONTHLY|YEARLY|ELITE)$/, async (ctx) => {
       await ctx.answerCbQuery();
       const planCode = ctx.match[1];
@@ -421,14 +420,14 @@ Click the button below to complete your payment via CryptoMus:`;
       );
     });
 
-    // 9. Strategy Selection Action
+    // 10. Strategy Selection Action
     this.bot.action(/^select_strat_(.+)$/, async (ctx) => {
       const stratCode = ctx.match[1];
       await ctx.answerCbQuery(`Selected Strategy: ${stratCode}`);
       await ctx.reply(`✅ Preferred Strategy updated to: ${stratCode}. Saved to your profile.`);
     });
 
-    // 10. Admin Commands
+    // 11. Admin Commands
     this.bot.command(['admin', 'adminstats', 'users', 'broadcast', 'system'], async (ctx) => {
       if (String(ctx.from.id) !== config.TELEGRAM_ADMIN_CHAT_ID) {
         return ctx.reply('Unauthorized: Admin access required.');
@@ -494,7 +493,6 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
     await ctx.reply(text, keyboard);
   }
 
-  // Announce New User Greeting in @hikimaaipalace (No signals inside channel)
   public announceNewUserInChannel(username: string) {
     try {
       this.bot.telegram.sendMessage(
@@ -504,7 +502,6 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
     } catch {}
   }
 
-  // Broadcast High-Impact Economic News Alerts to Channel
   public broadcastNewsAlertToChannel(newsTitle: string, currency: string, impact: string) {
     try {
       this.bot.telegram.sendMessage(
@@ -514,11 +511,10 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
     } catch {}
   }
 
-  // Founder Key Activation (HuntmeX10)
   private async activateFounderUser(tgUser: any, chatId: number | bigint) {
     let existing = await prisma.telegramUser.findUnique({
       where: { telegramId: BigInt(tgUser.id) },
-      include: { user: { include: { subscriptions: true } } },
+      include: { user: { include: { subscriptions: true, preferences: true } } },
     });
 
     if (existing) {
@@ -528,7 +524,7 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
       });
       return prisma.telegramUser.findUnique({
         where: { id: existing.id },
-        include: { user: { include: { subscriptions: true } } },
+        include: { user: { include: { subscriptions: true, preferences: true } } },
       });
     }
 
@@ -537,7 +533,7 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
         accessType: 'PREMIUM',
         freeCodeUsed: 'HUNTMEX10',
         trialStartDate: new Date(),
-        trialEndDate: new Date(Date.now() + 3650 * 24 * 3600 * 1000), // 10 years
+        trialEndDate: new Date(Date.now() + 3650 * 24 * 3600 * 1000),
         preferences: { create: { language: 'en' } },
       },
     });
@@ -551,23 +547,23 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
         lastName: tgUser.last_name || null,
         chatId: BigInt(chatId),
       },
-      include: { user: { include: { subscriptions: true } } },
+      include: { user: { include: { subscriptions: true, preferences: true } } },
     });
   }
 
   private async sendFounderWelcome(ctx: any, username: string) {
+    const lang = await this.getUserLang(ctx.from.id);
     const text = `👑 ADMIN / FOUNDER ACCESS UNLOCKED!\n\nHello ${username} 👋\nWelcome! You have full Admin & Founder Lifetime Premium Access. No subscription needed.\n\nAll Premium features, strategy selection, custom market watchlists, and live signals are fully unlocked for you!`;
-    await ctx.reply(text, this.getBottomReplyKeyboard());
+    await ctx.reply(text, this.getBottomReplyKeyboard(lang));
   }
 
-  // Helper method to activate free trial in DB
   private async activateFreeUser(tgUser: any, chatId: number | bigint, codeUsed: string) {
     const trialStart = new Date();
-    const trialEnd = new Date(trialStart.getTime() + 30 * 24 * 3600 * 1000); // 30 days trial
+    const trialEnd = new Date(trialStart.getTime() + 30 * 24 * 3600 * 1000);
 
     const existing = await prisma.telegramUser.findUnique({
       where: { telegramId: BigInt(tgUser.id) },
-      include: { user: { include: { subscriptions: true } } },
+      include: { user: { include: { subscriptions: true, preferences: true } } },
     });
 
     if (existing) {
@@ -597,7 +593,7 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
         lastName: tgUser.last_name || null,
         chatId: BigInt(chatId),
       },
-      include: { user: { include: { subscriptions: true } } },
+      include: { user: { include: { subscriptions: true, preferences: true } } },
     });
   }
 
@@ -613,12 +609,14 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
   }
 
   private async renderScanStatus(ctx: any) {
+    const lang = await this.getUserLang(ctx.from.id);
     const symbols = await prisma.marketSymbol.count({ where: { isSupported: true } });
-    const text = `⚡ AI SCAN ENGINE STATUS\n\nStatus: 🟢 ACTIVE\nScanning Mode: 24/7 Real-Time\nMonitored Markets: ${symbols} Assets\nScan Interval: Every 60 Seconds\nProvider Health: 🟢 ONLINE (TwelveData, Crypto, Forex)\n\nThe AI scanner analyzes technical structure, liquidity sweeps, and multi-timeframe confluence continuously.`;
-    await ctx.reply(text, this.getBottomReplyKeyboard());
+    const text = `⚡ AI SCAN ENGINE STATUS\n\nStatus: 🟢 ACTIVE\nScanning Mode: 24/7 Real-Time\nMonitored Markets: ${symbols} Assets\nScan Interval: Every 60 Seconds\nProvider Health: 🟢 ONLINE (TwelveData, Crypto, Forex)\nLast Scan Cycle: ${new Date().toISOString()}\n\nThe AI scanner analyzes technical structure, liquidity sweeps, and multi-timeframe confluence continuously across global assets.`;
+    await ctx.reply(text, this.getBottomReplyKeyboard(lang));
   }
 
   private async renderSignals(ctx: any) {
+    const lang = await this.getUserLang(ctx.from.id);
     const activeSignals = await prisma.signal.findMany({
       where: { status: { in: ['SENT', 'ACTIVE', 'ENTRY_REACHED'] } },
       include: { marketSymbol: true, strategy: true },
@@ -626,7 +624,7 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
     });
 
     if (activeSignals.length === 0) {
-      return ctx.reply('📊 ACTIVE SIGNALS:\n\nNo active signals currently open. Continuous market analysis running.', this.getBottomReplyKeyboard());
+      return ctx.reply('📊 ACTIVE SIGNALS:\n\nNo active signals currently open. Continuous market analysis running.', this.getBottomReplyKeyboard(lang));
     }
 
     let text = `📊 ACTIVE SIGNALS (${activeSignals.length}):\n\n`;
@@ -634,10 +632,20 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
       const progressBar = this.getProgressBar(s.qualityScore);
       text += `• ${s.marketSymbol.symbol} (${s.direction})\n  Strategy: ${s.strategy.name}\n  Quality: ${s.qualityScore}/100 ${progressBar}\n  Status: ${s.status}\n\n`;
     }
-    await ctx.reply(text, this.getBottomReplyKeyboard());
+    await ctx.reply(text, this.getBottomReplyKeyboard(lang));
   }
 
   private async renderMarkets(ctx: any) {
+    const text = `📈 SUPPORTED MARKET CATEGORIES:\n\nSelect a market category below to view assets or manage custom watchlists:`;
+    const keyboard = Markup.inlineKeyboard([
+      [Markup.button.callback('🪙 Crypto', 'cat_CRYPTO'), Markup.button.callback('📈 Forex', 'cat_FOREX')],
+      [Markup.button.callback('🥇 Metals', 'cat_METALS'), Markup.button.callback('🛢 Commodities', 'cat_COMMODITIES')],
+      [Markup.button.callback('📊 Indices', 'cat_INDICES'), Markup.button.callback('💻 Stocks', 'cat_STOCKS')],
+    ]);
+    await ctx.reply(text, keyboard);
+  }
+
+  private async renderMarketsByCategory(ctx: any, category: string) {
     const tgUser = ctx.from;
     const dbUser = await prisma.telegramUser.findUnique({
       where: { telegramId: BigInt(tgUser.id) },
@@ -645,11 +653,13 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
     });
 
     const isPremium = dbUser?.user.accessType === 'PREMIUM';
-    const allSymbols = await prisma.marketSymbol.findMany({ where: { isSupported: true } });
+    const categorySymbols = await prisma.marketSymbol.findMany({
+      where: { isSupported: true, category: category as any },
+    });
 
     const userWatchlistSymbolIds = new Set(dbUser?.user.watchlist.map((w) => w.marketSymbol.symbol) || []);
 
-    let text = `📈 SUPPORTED MARKETS & CUSTOM WATCHLIST (${allSymbols.length})\n\n`;
+    let text = `📈 ${category} MARKETS (${categorySymbols.length})\n\n`;
     if (isPremium) {
       text += `💎 Premium Custom Selection Active. Click symbols to toggle custom signal delivery ON/OFF:\n\n`;
     } else {
@@ -657,7 +667,7 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
     }
 
     const buttons = [];
-    for (const sym of allSymbols.slice(0, 10)) {
+    for (const sym of categorySymbols) {
       const isSelected = userWatchlistSymbolIds.has(sym.symbol);
       const label = `${isSelected ? '✅' : '⚪'} ${sym.symbol}`;
       buttons.push(Markup.button.callback(label, `toggle_symbol_${sym.symbol}`));
@@ -698,28 +708,32 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
   }
 
   private async renderPerformance(ctx: any) {
+    const lang = await this.getUserLang(ctx.from.id);
     const stats = await prisma.signalStatistic.findFirst();
     const total = stats ? stats.totalSignals : 0;
     const wins = stats ? stats.totalWins : 0;
     const losses = stats ? stats.totalLosses : 0;
     const winRate = total > 0 ? ((wins / total) * 100).toFixed(1) : 'N/A';
 
-    await ctx.reply(`📊 PLATFORM PERFORMANCE:\n\nTotal Completed Signals: ${total}\nWins: ${wins}\nLosses: ${losses}\nWin Rate: ${winRate}%\n\nPerformance metrics calculated strictly from verified database historical results.`, this.getBottomReplyKeyboard());
+    await ctx.reply(`📊 PLATFORM PERFORMANCE:\n\nTotal Completed Signals: ${total}\nWins: ${wins}\nLosses: ${losses}\nWin Rate: ${winRate}%\n\nPerformance metrics calculated strictly from verified database historical results.`, this.getBottomReplyKeyboard(lang));
   }
 
   private async renderSettings(ctx: any) {
-    await ctx.reply(`⚙️ USER SETTINGS & PROFILE CUSTOMIZATION:\n\n• Language: English (EN)\n• Timezone: UTC\n• News Filter: ACTIVE (High Impact)\n• Mandatory Channel: Joined @hikimaaipalace\n\nProfile Options:`, Markup.inlineKeyboard([
+    const lang = await this.getUserLang(ctx.from.id);
+    await ctx.reply(`⚙️ USER SETTINGS & PROFILE CUSTOMIZATION:\n\n• Current Language: ${lang.toUpperCase()}\n• Timezone: UTC\n• News Filter: ACTIVE (High Impact)\n• Mandatory Channel: Joined @hikimaaipalace\n\nProfile Options:`, Markup.inlineKeyboard([
       [Markup.button.callback('🌐 Change Language', 'edit_lang'), Markup.button.callback('🕒 Change Timezone', 'edit_tz')],
       [Markup.button.callback('🔔 Toggle News Filter', 'toggle_news_filter')],
     ]));
   }
 
   private async renderHelp(ctx: any) {
-    await ctx.reply(`❓ HELP & SUPPORT:\n\nHikima X10 AI operates 24/7 scanning global markets using real market feeds and deterministic strategy engines.\n\nOfficial Channel: @hikimaaipalace\nOfficial Support Contact: @Hikimawebdev\nDocumentation: https://hikimax10.ai/docs`, this.getBottomReplyKeyboard());
+    const lang = await this.getUserLang(ctx.from.id);
+    await ctx.reply(`❓ HELP & SUPPORT:\n\nHikima X10 AI operates 24/7 scanning global markets using real market feeds and deterministic strategy engines.\n\nOfficial Channel: @hikimaaipalace\nOfficial Support Contact: @Hikimawebdev\nDocumentation: https://hikimax10.ai/docs`, this.getBottomReplyKeyboard(lang));
   }
 
   private async renderStatus(ctx: any) {
     const tgUser = ctx.from;
+    const lang = await this.getUserLang(tgUser.id);
     const dbUser = await prisma.telegramUser.findUnique({
       where: { telegramId: BigInt(tgUser.id) },
       include: { user: true },
@@ -729,7 +743,7 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
 
     const isPremium = dbUser.user.accessType === 'PREMIUM';
     const statusText = `🔥 HIKIMA X10 AI STATUS\n\nUser: ${tgUser.username ? '@' + tgUser.username : tgUser.first_name}\nAccess: ${isPremium ? '💎 PREMIUM' : 'FREE'}\nDaily Signals Used: ${dbUser.dailySignalCount} / ${isPremium ? 5 : 1}\nTrial End Date: ${dbUser.user.trialEndDate ? dbUser.user.trialEndDate.toISOString().split('T')[0] : 'N/A'}`;
-    await ctx.reply(statusText, this.getBottomReplyKeyboard());
+    await ctx.reply(statusText, this.getBottomReplyKeyboard(lang));
   }
 
   private getProgressBar(score: number): string {

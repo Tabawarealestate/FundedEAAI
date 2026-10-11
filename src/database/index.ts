@@ -41,10 +41,12 @@ export async function seedInitialData() {
     });
   }
 
-  // 3. Seed Market Symbols
+  // 3. Seed Market Symbols across Categories
   const symbols = [
+    // Metals
     { symbol: 'XAUUSD', name: 'Gold vs US Dollar', category: 'METALS', pipSize: 0.1, digits: 2 },
     { symbol: 'XAGUSD', name: 'Silver vs US Dollar', category: 'METALS', pipSize: 0.01, digits: 2 },
+    // Forex
     { symbol: 'EURUSD', name: 'Euro vs US Dollar', category: 'FOREX', pipSize: 0.0001, digits: 5 },
     { symbol: 'GBPUSD', name: 'Great Britain Pound vs US Dollar', category: 'FOREX', pipSize: 0.0001, digits: 5 },
     { symbol: 'USDJPY', name: 'US Dollar vs Japanese Yen', category: 'FOREX', pipSize: 0.01, digits: 3 },
@@ -55,16 +57,28 @@ export async function seedInitialData() {
     { symbol: 'EURGBP', name: 'Euro vs Great Britain Pound', category: 'FOREX', pipSize: 0.0001, digits: 5 },
     { symbol: 'EURJPY', name: 'Euro vs Japanese Yen', category: 'FOREX', pipSize: 0.01, digits: 3 },
     { symbol: 'GBPJPY', name: 'Great Britain Pound vs Japanese Yen', category: 'FOREX', pipSize: 0.01, digits: 3 },
+    // Crypto
     { symbol: 'BTCUSD', name: 'Bitcoin vs US Dollar', category: 'CRYPTO', pipSize: 1.0, digits: 2 },
     { symbol: 'ETHUSD', name: 'Ethereum vs US Dollar', category: 'CRYPTO', pipSize: 0.1, digits: 2 },
+    { symbol: 'SOLUSD', name: 'Solana vs US Dollar', category: 'CRYPTO', pipSize: 0.01, digits: 2 },
+    { symbol: 'BNBUSD', name: 'Binance Coin vs US Dollar', category: 'CRYPTO', pipSize: 0.1, digits: 2 },
+    { symbol: 'XRPUSD', name: 'Ripple vs US Dollar', category: 'CRYPTO', pipSize: 0.0001, digits: 4 },
+    // Commodities
     { symbol: 'USOIL', name: 'WTI Crude Oil', category: 'COMMODITIES', pipSize: 0.01, digits: 2 },
     { symbol: 'BRENT', name: 'Brent Crude Oil', category: 'COMMODITIES', pipSize: 0.01, digits: 2 },
+    { symbol: 'NGAS', name: 'Natural Gas', category: 'COMMODITIES', pipSize: 0.001, digits: 3 },
+    // Indices
     { symbol: 'NAS100', name: 'US Tech 100 Index', category: 'INDICES', pipSize: 1.0, digits: 2 },
     { symbol: 'US30', name: 'Dow Jones Industrial Average', category: 'INDICES', pipSize: 1.0, digits: 2 },
     { symbol: 'SPX500', name: 'S&P 500 Index', category: 'INDICES', pipSize: 0.1, digits: 2 },
     { symbol: 'GER40', name: 'German DAX 40 Index', category: 'INDICES', pipSize: 1.0, digits: 2 },
     { symbol: 'UK100', name: 'FTSE 100 Index', category: 'INDICES', pipSize: 1.0, digits: 2 },
     { symbol: 'JP225', name: 'Nikkei 225 Index', category: 'INDICES', pipSize: 1.0, digits: 2 },
+    // Stocks
+    { symbol: 'AAPL', name: 'Apple Inc.', category: 'STOCKS', pipSize: 0.01, digits: 2 },
+    { symbol: 'TSLA', name: 'Tesla Inc.', category: 'STOCKS', pipSize: 0.01, digits: 2 },
+    { symbol: 'NVDA', name: 'NVIDIA Corp.', category: 'STOCKS', pipSize: 0.01, digits: 2 },
+    { symbol: 'MSFT', name: 'Microsoft Corp.', category: 'STOCKS', pipSize: 0.01, digits: 2 },
   ];
 
   for (const sym of symbols) {
