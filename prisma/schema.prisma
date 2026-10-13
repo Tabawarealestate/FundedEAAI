@@ -285,6 +285,7 @@ model Signal {
   levels         SignalLevel[]
   monitoring     SignalMonitoring?
 
+  @@index([symbolId, status, createdAt])
   @@map("signals")
 }
 
@@ -392,6 +393,8 @@ model UserPreference {
   language          String   @default("en")
   timezone          String   @default("UTC")
   preferredStrategy String   @default("AI_CONSENSUS")
+  selectedTimeframes String  @default("M15,H1,H4")
+  minQualityScore   Int      @default(75)
   newsFilterOn      Boolean  @default(true)
   alertNewSignal    Boolean  @default(true)
   alertTp1          Boolean  @default(true)

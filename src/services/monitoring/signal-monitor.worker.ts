@@ -108,8 +108,16 @@ export class SignalMonitoringWorker {
       notificationMsg = `⚪ ${signal.marketSymbol.symbol} SIGNAL EXPIRED: Entry zone not reached within 24 hours.`;
     }
 
-    // If state changed, update database & emit event
+    // If state changed, verify this event hasn't already been emitted for this signal ID
     if (newStatus !== prevStatus) {
+      const existingEvent = await prisma.signalEvent.findFirst({
+        where: { signalId: signal.id, eventType: newStatus },
+      });
+
+      if (existingEvent) {
+        return null;
+      }
+
       await prisma.$transaction([
         prisma.signal.update({
           where: { id: signal.id },

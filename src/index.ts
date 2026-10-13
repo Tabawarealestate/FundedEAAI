@@ -113,9 +113,30 @@ async function bootstrap() {
       for (const ev of events) {
         console.log(`[MONITOR] ${ev.symbol} -> ${ev.newStatus}: ${ev.message}`);
         if (botService) {
-          const tgUsers = await prisma.telegramUser.findMany();
-          for (const u of tgUsers) {
-            botService.bot.telegram.sendMessage(String(u.telegramId), ev.message).catch(() => {});
+          const activeUsers = await prisma.telegramUser.findMany({
+            include: { user: { include: { watchlist: { include: { marketSymbol: true } }, preferences: true } } },
+          });
+          const now = new Date();
+          for (const tu of activeUsers) {
+            const isPremium = tu.user.accessType === 'PREMIUM';
+            const trialExpired = tu.user.accessType === 'FREE' && tu.user.trialEndDate && now > new Date(tu.user.trialEndDate);
+            if (trialExpired) continue;
+
+            // Free tier symbol check
+            if (!isPremium) {
+              const symClean = ev.symbol.replace('/', '').toUpperCase();
+              if (!['EURUSD', 'NZDUSD'].includes(symClean)) continue;
+            }
+
+            // Watchlist check for users with non-empty watchlists
+            if (tu.user.watchlist && tu.user.watchlist.length > 0) {
+              const userSelectedSymbolNames = new Set(tu.user.watchlist.map((w) => w.marketSymbol?.symbol || ''));
+              if (!userSelectedSymbolNames.has(ev.symbol) && !tu.user.watchlist.some((w) => w.symbolId === ev.signalId)) {
+                continue;
+              }
+            }
+
+            botService.bot.telegram.sendMessage(String(tu.telegramId), ev.message).catch(() => {});
           }
         }
       }
@@ -154,21 +175,27 @@ async function bootstrap() {
           pipSize: sym.pipSize,
           dailySignalsSent: 0,
           maxDailyQuota: 5,
+          entryMin: consensus.chosenSetup.entryZone.min,
+          entryMax: consensus.chosenSetup.entryZone.max,
+          stopLoss: consensus.chosenSetup.stopLoss,
+          tp1: consensus.chosenSetup.takeProfitLevels.tp1,
+          tp2: consensus.chosenSetup.takeProfitLevels.tp2,
         });
 
         if (!riskCheck.isApproved) continue;
+
+        // Check persistent PostgreSQL database deduplication (active signal check + 4h symbol cooldown)
+        const isDuplicate = await deduplicationService.isDatabaseDuplicate(sym.id, consensus.finalDirection, 4);
+        if (isDuplicate) {
+          continue;
+        }
 
         const fingerprint = deduplicationService.generateFingerprint({
           symbol: sym.symbol,
           strategyCode: consensus.chosenSetup.strategyName,
           direction: consensus.finalDirection,
           timeframe: 'M15',
-          entryMin: consensus.chosenSetup.entryZone.min,
-          entryMax: consensus.chosenSetup.entryZone.max,
         });
-
-        if (deduplicationService.isDuplicate(fingerprint)) continue;
-        deduplicationService.recordSignal(fingerprint);
 
         // Dynamically resolve matching DB Strategy
         const stratNameUpper = consensus.chosenSetup.strategyName.toUpperCase();
@@ -270,6 +297,20 @@ async function bootstrap() {
               if (!stratCodeUpper.includes(prefUpper) && !dbStrategy.name.toUpperCase().includes(prefUpper)) {
                 continue;
               }
+            }
+
+            // 4. Preferred Timeframe Filter
+            const prefTimeframes = tu.user.preferences?.selectedTimeframes
+              ? tu.user.preferences.selectedTimeframes.split(',').map((t) => t.trim().toUpperCase())
+              : ['M15', 'H1', 'H4'];
+            if (!prefTimeframes.includes(newSignal.timeframe.toUpperCase())) {
+              continue;
+            }
+
+            // 5. Min Quality Score Threshold Filter
+            const minScore = tu.user.preferences?.minQualityScore || 75;
+            if (newSignal.qualityScore < minScore) {
+              continue;
             }
 
             const quota = isPremium ? 5 : 1;
