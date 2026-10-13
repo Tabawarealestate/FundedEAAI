@@ -120,10 +120,32 @@ async function bootstrap() {
           });
 
           for (const notif of recipientNotifications) {
-            const tgId = notif.user.telegramUser?.telegramId;
-            if (tgId) {
-              botService.bot.telegram.sendMessage(String(tgId), ev.message).catch(() => {});
+            const user = notif.user;
+            const tgId = user.telegramUser?.telegramId;
+            if (!tgId) continue;
+
+            const isPremium = user.accessType === 'PREMIUM';
+            const symClean = ev.symbol.replace('/', '').toUpperCase();
+
+            // 1. Free tier symbol check
+            if (!isPremium && !['EURUSD', 'ETHUSD'].includes(symClean)) {
+              continue;
             }
+
+            // 2. Watchlist check: Only send monitoring event if symbol is in user's active watchlist
+            const userWatchlist = await prisma.watchlist.findMany({
+              where: { userId: user.id },
+              include: { marketSymbol: true },
+            });
+
+            if (userWatchlist.length > 0) {
+              const selectedSymbols = new Set(userWatchlist.map((w) => w.marketSymbol.symbol.replace('/', '').toUpperCase()));
+              if (!selectedSymbols.has(symClean)) {
+                continue; // User did NOT select this symbol! Skip notification.
+              }
+            }
+
+            botService.bot.telegram.sendMessage(String(tgId), ev.message).catch(() => {});
           }
         }
       }
