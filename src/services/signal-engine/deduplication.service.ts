@@ -12,7 +12,7 @@ export interface FingerprintParams {
 
 export class SignalDeduplicationService {
   generateFingerprint(params: FingerprintParams): string {
-    const rawKey = `${params.symbol.toUpperCase()}:${params.strategyCode.toUpperCase()}:${params.direction.toUpperCase()}:${params.timeframe}`;
+    const rawKey = `${params.symbol.toUpperCase()}:${params.strategyCode.toUpperCase()}:${params.direction.toUpperCase()}:${params.timeframe}:${Date.now()}`;
     return crypto.createHash('sha256').update(rawKey).digest('hex');
   }
 

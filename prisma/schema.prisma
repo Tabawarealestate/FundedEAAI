@@ -91,20 +91,21 @@ model User {
 }
 
 model TelegramUser {
-  id               String      @id @default(uuid())
-  userId           String      @unique
-  user             User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  telegramId       BigInt      @unique
-  username         String?
-  firstName        String?
-  lastName         String?
-  languageCode     String      @default("en")
-  isBot            Boolean     @default(false)
-  chatId           BigInt?
-  dailySignalCount Int         @default(0)
-  lastSignalDate   DateTime?
-  createdAt        DateTime    @default(now())
-  updatedAt        DateTime    @updatedAt
+  id                  String      @id @default(uuid())
+  userId              String      @unique
+  user                User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  telegramId          BigInt      @unique
+  username            String?
+  firstName           String?
+  lastName            String?
+  languageCode        String      @default("en")
+  isBot               Boolean     @default(false)
+  chatId              BigInt?
+  dailySignalCount    Int         @default(0)
+  lastSignalDate      DateTime?
+  freeWelcomeXauSent  Boolean     @default(false)
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
 
   @@map("telegram_users")
 }
@@ -314,15 +315,20 @@ model SignalLevel {
 }
 
 model SignalMonitoring {
-  id             String   @id @default(uuid())
-  signalId       String   @unique
-  signal         Signal   @relation(fields: [signalId], references: [id], onDelete: Cascade)
-  currentPrice   Float
-  highestPrice   Float
-  lowestPrice    Float
-  isSlMovedBe    Boolean  @default(false)
-  isPartialClosed Boolean @default(false)
-  lastCheckedAt  DateTime @default(now())
+  id              String   @id @default(uuid())
+  signalId        String   @unique
+  signal          Signal   @relation(fields: [signalId], references: [id], onDelete: Cascade)
+  currentPrice    Float
+  highestPrice    Float
+  lowestPrice     Float
+  isSlMovedBe     Boolean  @default(false)
+  isPartialClosed Boolean  @default(false)
+  isNotifiedEntry Boolean  @default(false)
+  isNotifiedTp1   Boolean  @default(false)
+  isNotifiedTp2   Boolean  @default(false)
+  isNotifiedTp3   Boolean  @default(false)
+  isNotifiedSl    Boolean  @default(false)
+  lastCheckedAt   DateTime @default(now())
 
   @@map("signal_monitoring")
 }
