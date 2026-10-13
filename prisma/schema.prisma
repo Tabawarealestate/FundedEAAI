@@ -253,7 +253,7 @@ model UserStrategy {
 
 model Signal {
   id             String          @id @default(uuid())
-  fingerprint    String          @unique
+  fingerprint    String
   symbolId       String
   marketSymbol   MarketSymbol    @relation(fields: [symbolId], references: [id])
   strategyId     String
@@ -287,6 +287,7 @@ model Signal {
   monitoring     SignalMonitoring?
 
   @@index([symbolId, status, createdAt])
+  @@index([fingerprint])
   @@map("signals")
 }
 
