@@ -8,6 +8,7 @@ import { EnsembleEngine } from './services/strategy-engine/ensemble.engine';
 import { BreakoutStrategy } from './services/strategy-engine/breakout.strategy';
 import { RiskEngine } from './services/signal-engine/risk.engine';
 import { SignalDeduplicationService } from './services/signal-engine/deduplication.service';
+import { IslamicSchedulerWorker } from './services/islamic/islamic-scheduler.worker';
 import { config } from './config';
 import { prisma, seedInitialData } from './database';
 
@@ -264,6 +265,101 @@ async function bootstrap() {
             }
           }
 
+          // Evaluate user eligibility FIRST before creating a database signal record
+          const now = new Date();
+          const acceptingUsers: any[] = [];
+
+          for (const tu of activeUsers) {
+            let currentDailyCount = tu.dailySignalCount;
+
+            if (tu.lastSignalDate) {
+              const lastDateStr = new Date(tu.lastSignalDate).toISOString().split('T')[0];
+              const nowDateStr = now.toISOString().split('T')[0];
+              if (lastDateStr !== nowDateStr) {
+                currentDailyCount = 0;
+                await prisma.telegramUser.update({
+                  where: { id: tu.id },
+                  data: { dailySignalCount: 0 },
+                });
+              }
+            }
+
+            const isPremium = tu.user.accessType === 'PREMIUM';
+            const trialExpired = tu.user.accessType === 'FREE' && tu.user.trialEndDate && now > new Date(tu.user.trialEndDate);
+
+            if (trialExpired) continue;
+
+            const recentUserNotifs = await prisma.notification.findMany({
+              where: { userId: tu.userId },
+              orderBy: { createdAt: 'desc' },
+              take: 20,
+            });
+
+            let activeSymbolSignalExists = false;
+            let activeTotalCount = 0;
+
+            for (const notif of recentUserNotifs) {
+              const activeUserSignal = await prisma.signal.findUnique({
+                where: { id: notif.title },
+              });
+              if (
+                activeUserSignal &&
+                !activeUserSignal.closedAt &&
+                ['SENT', 'ACTIVE', 'ENTRY_REACHED', 'TP1_HIT', 'TP2_HIT', 'SL_MOVED_TO_ENTRY', 'BREAKEVEN'].includes(activeUserSignal.status)
+              ) {
+                activeTotalCount++;
+                if (activeUserSignal.symbolId === sym.id) {
+                  activeSymbolSignalExists = true;
+                }
+              }
+            }
+
+            if (activeSymbolSignalExists) continue;
+
+            const sequentialSignalMode = true;
+            if (sequentialSignalMode && activeTotalCount >= 1) continue;
+
+            const symClean = sym.symbol.replace('/', '').toUpperCase();
+            if (!isPremium) {
+              const isXauWelcome = !tu.freeWelcomeXauSent && symClean === 'XAUUSD' && dbStrategy.code === 'SMC';
+              const isAllowedFreePair = ['EURUSD', 'ETHUSD'].includes(symClean) && dbStrategy.code === 'SMC';
+              if (!isXauWelcome && !isAllowedFreePair) continue;
+            }
+
+            if (tu.user.watchlist && tu.user.watchlist.length > 0) {
+              const userSelectedSymbolIds = new Set(tu.user.watchlist.map((w) => w.symbolId));
+              if (!userSelectedSymbolIds.has(sym.id)) continue;
+            } else if (isPremium) {
+              const defaultPremiumSymbols = ['XAUUSD', 'EURUSD', 'GBPUSD', 'BTCUSD', 'USOIL'];
+              if (!defaultPremiumSymbols.includes(symClean)) continue;
+            }
+
+            const prefStrategy = tu.user.preferences?.preferredStrategy;
+            if (prefStrategy && prefStrategy !== 'AI_CONSENSUS' && prefStrategy !== 'ALL' && prefStrategy !== 'SELECT_ALL_STRATEGIES' && prefStrategy !== 'SELECT_ALL') {
+              const stratCodeUpper = dbStrategy.code.toUpperCase();
+              const prefUpper = prefStrategy.toUpperCase();
+              if (!stratCodeUpper.includes(prefUpper) && !dbStrategy.name.toUpperCase().includes(prefUpper)) continue;
+            }
+
+            const prefTimeframes = tu.user.preferences?.selectedTimeframes
+              ? tu.user.preferences.selectedTimeframes.split(',').map((t) => t.trim().toUpperCase())
+              : ['M15', 'H1', 'H4'];
+            if (!prefTimeframes.includes('M15')) continue;
+
+            const minScore = tu.user.preferences?.minQualityScore || 75;
+            if (consensus.consensusScore < minScore) continue;
+
+            const quota = isPremium ? 5 : 1;
+            if (currentDailyCount >= quota) continue;
+
+            acceptingUsers.push({ tu, prefStrategy });
+          }
+
+          // ONLY create DB signal if at least 1 active user accepted this candidate setup!
+          if (acceptingUsers.length === 0) {
+            continue;
+          }
+
           const fingerprint = deduplicationService.generateFingerprint({
             symbol: sym.symbol,
             strategyCode: consensus.chosenSetup.strategyName,
@@ -304,163 +400,41 @@ async function bootstrap() {
 
           if (newSignal && botService) {
             console.log(`🔥 [SIGNAL CREATED] ${sym.symbol} ${consensus.finalDirection} (${consensus.consensusScore}/100) Strategy: ${dbStrategy.name}`);
-            const now = new Date();
 
-            for (const tu of activeUsers) {
-              let currentDailyCount = tu.dailySignalCount;
-
-              // Reset daily count if last signal was from a previous UTC calendar day
-              if (tu.lastSignalDate) {
-                const lastDateStr = new Date(tu.lastSignalDate).toISOString().split('T')[0];
-                const nowDateStr = now.toISOString().split('T')[0];
-                if (lastDateStr !== nowDateStr) {
-                  currentDailyCount = 0;
-                  await prisma.telegramUser.update({
-                    where: { id: tu.id },
-                    data: { dailySignalCount: 0 },
-                  });
-                }
-              }
-
-              const isPremium = tu.user.accessType === 'PREMIUM';
-              const trialExpired = tu.user.accessType === 'FREE' && tu.user.trialEndDate && now > new Date(tu.user.trialEndDate);
-
-              if (trialExpired) {
-                console.log(`[SignalEngine] user=${tu.username || tu.telegramId} symbol=${sym.symbol} strategy=${dbStrategy.code} decision=REJECT reason=TRIAL_EXPIRED`);
-                continue;
-              }
-
-              // SINGLE-SIGNAL SEQUENTIAL LOCK CHECK: Check if user currently has an active unclosed signal in progress
-              const recentUserNotifs = await prisma.notification.findMany({
-                where: { userId: tu.userId },
-                orderBy: { createdAt: 'desc' },
-                take: 20,
-              });
-
-              let activeSymbolSignalExists = false;
-              let activeTotalCount = 0;
-
-              for (const notif of recentUserNotifs) {
-                const activeUserSignal = await prisma.signal.findUnique({
-                  where: { id: notif.title },
-                });
-                if (
-                  activeUserSignal &&
-                  !activeUserSignal.closedAt &&
-                  ['SENT', 'ACTIVE', 'ENTRY_REACHED', 'TP1_HIT', 'TP2_HIT', 'SL_MOVED_TO_ENTRY', 'BREAKEVEN'].includes(activeUserSignal.status)
-                ) {
-                  activeTotalCount++;
-                  if (activeUserSignal.symbolId === sym.id) {
-                    activeSymbolSignalExists = true;
-                  }
-                }
-              }
-
-              if (activeSymbolSignalExists) {
-                console.log(`[SignalEngine] user=${tu.username || tu.telegramId} symbol=${sym.symbol} strategy=${dbStrategy.code} decision=REJECT reason=ACTIVE_SIGNAL_FOR_SYMBOL_IN_PROGRESS`);
-                continue; // User already has an active pending signal on this exact symbol
-              }
-
-              // Default Sequential Signal Mode: 1 Active Signal Opportunity at a time per user
-              const sequentialSignalMode = true;
-              if (sequentialSignalMode && activeTotalCount >= 1) {
-                console.log(`[SignalEngine] user=${tu.username || tu.telegramId} symbol=${sym.symbol} strategy=${dbStrategy.code} decision=REJECT reason=ACTIVE_SIGNAL_LOCK_IN_PROGRESS activeCount=${activeTotalCount}`);
-                continue;
-              }
-
-              // 1. Free Users Symbol & Welcome Rule (EURUSD / ETHUSD, or 1-time XAUUSD welcome signal)
+            for (const { tu, prefStrategy } of acceptingUsers) {
+              console.log(`[SignalEngine] user=${tu.username || tu.telegramId} symbol=${sym.symbol} strategy=${dbStrategy.code} decision=ACCEPT`);
+              const userTz = tu.user.preferences?.timezone || 'UTC';
+              const isSelectAllMode = prefStrategy === 'SELECT_ALL_STRATEGIES' || prefStrategy === 'SELECT_ALL';
               const symClean = sym.symbol.replace('/', '').toUpperCase();
-              if (!isPremium) {
-                const isXauWelcome = !tu.freeWelcomeXauSent && symClean === 'XAUUSD' && dbStrategy.code === 'SMC';
-                const isAllowedFreePair = ['EURUSD', 'ETHUSD'].includes(symClean) && dbStrategy.code === 'SMC';
 
-                if (!isXauWelcome && !isAllowedFreePair) {
-                  console.log(`[SignalEngine] user=${tu.username || tu.telegramId} symbol=${sym.symbol} strategy=${dbStrategy.code} decision=REJECT reason=FREE_PAIR_NOT_ALLOWED`);
-                  continue;
-                }
-              }
+              const sent = await botService.sendFormattedSignal(
+                String(tu.telegramId),
+                {
+                  ...newSignal,
+                  marketSymbol: sym,
+                  strategyName: dbStrategy.name,
+                  isSelectAllMode,
+                },
+                userTz
+              );
 
-              // 2. Market Watchlist Filter (Respects custom selections; defaults to top liquid markets if empty)
-              if (tu.user.watchlist && tu.user.watchlist.length > 0) {
-                const userSelectedSymbolIds = new Set(tu.user.watchlist.map((w) => w.symbolId));
-                if (!userSelectedSymbolIds.has(sym.id)) {
-                  console.log(`[SignalEngine] user=${tu.username || tu.telegramId} symbol=${sym.symbol} strategy=${dbStrategy.code} decision=REJECT reason=SYMBOL_NOT_IN_WATCHLIST`);
-                  continue;
-                }
-              } else if (isPremium) {
-                // Default top symbols for Premium users with empty watchlist
-                const defaultPremiumSymbols = ['XAUUSD', 'EURUSD', 'GBPUSD', 'BTCUSD', 'USOIL'];
-                if (!defaultPremiumSymbols.includes(symClean)) {
-                  console.log(`[SignalEngine] user=${tu.username || tu.telegramId} symbol=${sym.symbol} strategy=${dbStrategy.code} decision=REJECT reason=SYMBOL_NOT_IN_DEFAULT_PREMIUM_WATCHLIST`);
-                  continue;
-                }
-              }
-
-              // 3. User Selected Strategy Preference Filter
-              const prefStrategy = tu.user.preferences?.preferredStrategy;
-              if (prefStrategy && prefStrategy !== 'AI_CONSENSUS' && prefStrategy !== 'ALL' && prefStrategy !== 'SELECT_ALL_STRATEGIES' && prefStrategy !== 'SELECT_ALL') {
-                const stratCodeUpper = dbStrategy.code.toUpperCase();
-                const prefUpper = prefStrategy.toUpperCase();
-                if (!stratCodeUpper.includes(prefUpper) && !dbStrategy.name.toUpperCase().includes(prefUpper)) {
-                  console.log(`[SignalEngine] user=${tu.username || tu.telegramId} symbol=${sym.symbol} strategy=${dbStrategy.code} decision=REJECT reason=STRATEGY_MISMATCH userPref=${prefStrategy}`);
-                  continue;
-                }
-              }
-
-              // 4. Preferred Timeframe Filter
-              const prefTimeframes = tu.user.preferences?.selectedTimeframes
-                ? tu.user.preferences.selectedTimeframes.split(',').map((t) => t.trim().toUpperCase())
-                : ['M15', 'H1', 'H4'];
-              if (!prefTimeframes.includes(newSignal.timeframe.toUpperCase())) {
-                console.log(`[SignalEngine] user=${tu.username || tu.telegramId} symbol=${sym.symbol} strategy=${dbStrategy.code} decision=REJECT reason=TIMEFRAME_MISMATCH signalTf=${newSignal.timeframe}`);
-                continue;
-              }
-
-              // 5. Min Quality Score Threshold Filter
-              const minScore = tu.user.preferences?.minQualityScore || 75;
-              if (newSignal.qualityScore < minScore) {
-                console.log(`[SignalEngine] user=${tu.username || tu.telegramId} symbol=${sym.symbol} strategy=${dbStrategy.code} decision=REJECT reason=QUALITY_SCORE_BELOW_MIN score=${newSignal.qualityScore} minScore=${minScore}`);
-                continue;
-              }
-
-              const quota = isPremium ? 5 : 1;
-
-              if (currentDailyCount < quota) {
-                console.log(`[SignalEngine] user=${tu.username || tu.telegramId} symbol=${sym.symbol} strategy=${dbStrategy.code} decision=ACCEPT`);
-                const userTz = tu.user.preferences?.timezone || 'UTC';
-                const isSelectAllMode = prefStrategy === 'SELECT_ALL_STRATEGIES' || prefStrategy === 'SELECT_ALL';
-                const sent = await botService.sendFormattedSignal(
-                  String(tu.telegramId),
-                  {
-                    ...newSignal,
-                    marketSymbol: sym,
-                    strategyName: dbStrategy.name,
-                    isSelectAllMode,
+              if (sent) {
+                await prisma.telegramUser.update({
+                  where: { id: tu.id },
+                  data: {
+                    dailySignalCount: { increment: 1 },
+                    lastSignalDate: now,
+                    freeWelcomeXauSent: tu.user.accessType === 'FREE' && symClean === 'XAUUSD' ? true : tu.freeWelcomeXauSent,
                   },
-                  userTz
-                );
+                });
 
-                if (sent) {
-                  await prisma.telegramUser.update({
-                    where: { id: tu.id },
-                    data: {
-                      dailySignalCount: { increment: 1 },
-                      lastSignalDate: now,
-                      freeWelcomeXauSent: !isPremium && symClean === 'XAUUSD' ? true : tu.freeWelcomeXauSent,
-                    },
-                  });
-
-                  // Record delivery notification linking user ID and signal ID
-                  await prisma.notification.create({
-                    data: {
-                      userId: tu.userId,
-                      title: newSignal.id,
-                      body: sym.symbol,
-                    },
-                  });
-                }
-              } else {
-                console.log(`[SignalEngine] user=${tu.username || tu.telegramId} symbol=${sym.symbol} strategy=${dbStrategy.code} decision=REJECT reason=DAILY_QUOTA_REACHED count=${currentDailyCount} quota=${quota}`);
+                await prisma.notification.create({
+                  data: {
+                    userId: tu.userId,
+                    title: newSignal.id,
+                    body: sym.symbol,
+                  },
+                });
               }
             }
           }
@@ -478,6 +452,30 @@ async function bootstrap() {
   // Launch background tasks
   scheduleMonitoring();
   scheduleScanner();
+
+  // 7. Start Background Islamic Scheduler Worker Loop
+  const islamicSchedulerWorker = new IslamicSchedulerWorker();
+  let islamicTimeout: NodeJS.Timeout | null = null;
+
+  const scheduleIslamicReminders = async () => {
+    if (!isRunning) return;
+    try {
+      if (botService) {
+        await islamicSchedulerWorker.processDailyReminders(async (tgId, msg) => {
+          await botService!.bot.telegram.sendMessage(tgId, msg);
+          return true;
+        });
+      }
+    } catch (err) {
+      console.error('⚠️ [ISLAMIC SCHEDULER] Background worker error:', err);
+    } finally {
+      if (isRunning) {
+        islamicTimeout = setTimeout(scheduleIslamicReminders, 15 * 60 * 1000);
+      }
+    }
+  };
+
+  scheduleIslamicReminders();
 }
 
 if (process.env.NODE_ENV !== 'test') {
