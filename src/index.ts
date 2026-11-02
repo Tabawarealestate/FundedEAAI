@@ -6,6 +6,7 @@ import { EconomicNewsService } from './services/market-data/news.service';
 import { SignalMonitoringWorker } from './services/monitoring/signal-monitor.worker';
 import { EnsembleEngine } from './services/strategy-engine/ensemble.engine';
 import { BreakoutStrategy } from './services/strategy-engine/breakout.strategy';
+import { QuickXauusdService } from './services/strategy-engine/quick-xauusd.service';
 import { RiskEngine } from './services/signal-engine/risk.engine';
 import { SignalDeduplicationService } from './services/signal-engine/deduplication.service';
 import { IslamicSchedulerWorker } from './services/islamic/islamic-scheduler.worker';
@@ -75,6 +76,7 @@ async function bootstrap() {
   const monitoringWorker = new SignalMonitoringWorker(marketDataProvider);
   const ensembleEngine = new EnsembleEngine();
   const breakoutStrategy = new BreakoutStrategy();
+  const quickXauusdService = new QuickXauusdService();
   const riskEngine = new RiskEngine();
   const deduplicationService = new SignalDeduplicationService();
 
@@ -230,6 +232,174 @@ async function bootstrap() {
       try {
         upcomingNews = await newsService.fetchHighImpactNews();
       } catch {}
+
+      // 1b. PREMIUM ⚡ QUICK XAUUSD SCALPING SCANNER
+      if (marketCalendar.isMarketTradableNow('XAUUSD')) {
+        try {
+          const quickUsers = await prisma.telegramUser.findMany({
+            where: {
+              user: {
+                accessType: 'PREMIUM',
+                preferences: { quickXauusdEnabled: true },
+              },
+            },
+            include: { user: { include: { preferences: true } } },
+          });
+
+          if (quickUsers.length > 0) {
+            // Find quick users who do NOT have an active Quick XAUUSD signal
+            const eligibleQuickUsers: any[] = [];
+            for (const qu of quickUsers) {
+              const notifs = await prisma.notification.findMany({
+                where: { userId: qu.userId },
+                orderBy: { createdAt: 'desc' },
+                take: 20,
+              });
+
+              let hasActiveQuick = false;
+              for (const n of notifs) {
+                const sig = await prisma.signal.findUnique({ where: { id: n.title } });
+                if (sig && sig.signalMode === 'QUICK_XAUUSD' && !sig.closedAt) {
+                  hasActiveQuick = true;
+                  break;
+                }
+              }
+
+              if (!hasActiveQuick) {
+                eligibleQuickUsers.push(qu);
+              }
+            }
+
+            if (eligibleQuickUsers.length > 0) {
+              const xauH1 = await marketDataProvider.fetchCandles('XAUUSD', 'H1', 40);
+              const xauM15 = await marketDataProvider.fetchCandles('XAUUSD', 'M15', 40);
+              const xauM5 = await marketDataProvider.fetchCandles('XAUUSD', 'M5', 40);
+
+              if (xauM5.length >= 20 && xauM15.length >= 20 && xauH1.length >= 20) {
+                const quickAnalysis = await quickXauusdService.analyzeXauusd(
+                  'XAUUSD',
+                  { H1: xauH1, M15: xauM15, M5: xauM5 },
+                  'London/New York'
+                );
+
+                if (quickAnalysis.isTradable && quickAnalysis.signal) {
+                  const qSig = quickAnalysis.signal;
+                  const goldSym = await prisma.marketSymbol.findFirst({
+                    where: { symbol: { in: ['XAUUSD', 'GOLD'] } },
+                  });
+
+                  let quickStrat = await prisma.strategy.findFirst({
+                    where: { code: 'QUICK_SCALPING' },
+                  });
+                  if (!quickStrat) {
+                    quickStrat = await prisma.strategy.findFirst({ where: { code: 'SMC' } });
+                  }
+
+                  if (goldSym && quickStrat) {
+                    const isQuickDup = await deduplicationService.isDatabaseDuplicate(goldSym.id, qSig.direction, 2);
+                    if (!isQuickDup) {
+                      const fingerprint = deduplicationService.generateFingerprint({
+                        symbol: 'XAUUSD',
+                        strategyCode: 'QUICK_XAUUSD',
+                        direction: qSig.direction,
+                        timeframe: 'M5',
+                      });
+
+                      const newQuickSignal = await prisma.signal.create({
+                        data: {
+                          fingerprint,
+                          symbolId: goldSym.id,
+                          strategyId: quickStrat.id,
+                          timeframe: 'M5',
+                          direction: qSig.direction,
+                          confidence: qSig.qualityScore,
+                          qualityScore: qSig.qualityScore,
+                          entryMin: qSig.entryMin,
+                          entryMax: qSig.entryMax,
+                          stopLoss: qSig.stopLoss,
+                          tp1: qSig.tp1,
+                          tp2: qSig.tp2,
+                          tp3: qSig.tp3,
+                          riskReward: qSig.riskReward,
+                          reasoning: qSig.reasoning as any,
+                          supporting: qSig.supportingFactors as any,
+                          opposing: qSig.opposingFactors as any,
+                          marketRegime: 'Scalping Momentum',
+                          session: qSig.session,
+                          signalMode: 'QUICK_XAUUSD',
+                          status: 'SENT',
+                          sentAt: new Date(),
+                        },
+                      });
+
+                      console.log(`⚡ [QUICK XAUUSD SIGNAL CREATED] Direction: ${qSig.direction} Score: ${qSig.qualityScore}/100`);
+
+                      for (const qu of eligibleQuickUsers) {
+                        const quickMsg = `━━━━━━━━━━━━━━━━━━━━
+⚡ QUICK XAUUSD SCALPING
+━━━━━━━━━━━━━━━━━━━━
+
+🟡 GOLD / XAUUSD
+
+📊 Direction: ${qSig.direction === 'BUY' ? '🟢 BUY' : '🔴 SELL'}
+
+🎯 Entry Zone:
+${qSig.entryMin.toFixed(2)} – ${qSig.entryMax.toFixed(2)}
+
+🛑 Stop Loss:
+${qSig.stopLoss.toFixed(2)}
+
+🎯 TP1: ${qSig.tp1.toFixed(2)}
+🎯 TP2: ${qSig.tp2.toFixed(2)}
+🎯 TP3: ${qSig.tp3.toFixed(2)}
+
+📈 Risk/Reward:
+${qSig.riskReward}
+
+⏱ Timeframes:
+H1 → M15 → M5
+
+🔥 Session:
+${qSig.session}
+
+🧠 Confluence:
+${qSig.confluenceList.join(' + ')}
+
+📊 Signal Quality:
+${qSig.qualityScore}/100
+
+📌 Setup:
+${qSig.reasoning.map((r: string) => `• ${r}`).join('\n')}
+
+⚠️ Invalidation:
+${qSig.invalidationReason}
+
+📍 Status: WAITING FOR ENTRY
+
+#QuickXAU_${newQuickSignal.id.slice(0, 8)}
+━━━━━━━━━━━━━━━━━━━━`;
+
+                        if (botService) {
+                          await botService.bot.telegram.sendMessage(String(qu.telegramId), quickMsg).catch(() => {});
+                          await prisma.notification.create({
+                            data: {
+                              userId: qu.userId,
+                              title: newQuickSignal.id,
+                              body: 'XAUUSD',
+                            },
+                          });
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        } catch (xauErr) {
+          console.error('⚠️ [QUICK XAUUSD] Scanner cycle error:', xauErr);
+        }
+      }
 
       // PROCESS CANDIDATES AND MATCH WITH ELIGIBLE USERS
       if (validCandidates.length > 0) {

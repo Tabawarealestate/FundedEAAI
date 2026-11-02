@@ -274,6 +274,7 @@ model Signal {
   opposing       Json            // Array of opposing factors
   marketRegime   String
   session        String
+  signalMode     String          @default("NORMAL") // NORMAL, QUICK_XAUUSD
   status         SignalStatus    @default(GENERATED)
   sentAt         DateTime?
   closedAt       DateTime?
@@ -404,6 +405,7 @@ model UserPreference {
   minQualityScore   Int      @default(75)
   newsFilterOn      Boolean  @default(true)
   muslimActivities  Boolean  @default(false)
+  quickXauusdEnabled Boolean @default(false)
   alertNewSignal    Boolean  @default(true)
   alertTp1          Boolean  @default(true)
   alertTp2          Boolean  @default(true)

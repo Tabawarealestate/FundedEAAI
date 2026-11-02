@@ -155,11 +155,15 @@ export class TelegramBotService {
         const accessLabel = dbTgUser.user.accessType === 'PREMIUM' ? '💎 PREMIUM (Unlocked)' : 'FREE (Active)';
         const welcomeText = getText(lang, 'welcome', username, accessLabel);
 
+        const quickXauOn = dbTgUser.user.preferences?.quickXauusdEnabled || false;
+        const quickXauBtnLabel = `⚡ Quick XAUUSD: ${quickXauOn ? '🟢 ON' : '🔴 OFF'}`;
+
         const inlineKb = Markup.inlineKeyboard([
           [Markup.button.callback('📊 Active Signals', 'menu_signals'), Markup.button.callback('📈 Watchlist & Markets', 'menu_markets')],
-          [Markup.button.callback('🧠 Strategy Engine', 'menu_strategies'), Markup.button.callback('💎 Premium Plans', 'menu_subscribe')],
+          [Markup.button.callback('🧠 Strategy Engine', 'menu_strategies'), Markup.button.callback(quickXauBtnLabel, 'menu_quick_xauusd')],
           [Markup.button.callback('🤖 Trading AI Assistant', 'menu_ai_chat'), Markup.button.callback('📊 Performance', 'menu_performance')],
-          [Markup.button.callback('⚙️ User Settings', 'menu_settings'), Markup.button.callback('❓ Help & Support', 'menu_help')],
+          [Markup.button.callback('💎 Premium Plans', 'menu_subscribe'), Markup.button.callback('⚙️ User Settings', 'menu_settings')],
+          [Markup.button.callback('❓ Help & Support', 'menu_help')],
         ]);
 
         await ctx.reply(welcomeText, this.getBottomReplyKeyboard(lang));
@@ -309,7 +313,7 @@ export class TelegramBotService {
       const userCity = dbUser?.user.preferences?.timezone?.split('/')[1] || 'Mecca';
       const pt = this.prayerTimeService.calculatePrayerTimes(userCity);
 
-      const text = `🕌 TODAY'S PRAYER TIMES\n━━━━━━━━━━━━━━━━━━\n\n🌅 Fajr       ${pt.fajr}\n☀️ Dhuhr      ${pt.dhuhr}\n🌤️ Asr        ${pt.asr}\n<ctrl42> Maghrib    ${pt.maghrib}\n🌙 Isha       ${pt.isha}\n\n📍 Location: ${pt.city}\n📅 Date: ${pt.date}`;
+      const text = `🕌 TODAY'S PRAYER TIMES\n━━━━━━━━━━━━━━━━━━\n\n🌅 Fajr       ${pt.fajr}\n☀️ Dhuhr      ${pt.dhuhr}\n🌤️ Asr        ${pt.asr}\n🌇 Maghrib    ${pt.maghrib}\n🌙 Isha       ${pt.isha}\n\n📍 Location: ${pt.city}\n📅 Date: ${pt.date}`;
 
       await this.cleanAndReply(
         ctx,
@@ -596,6 +600,104 @@ export class TelegramBotService {
       if (command === 'help' || command === 'support') return this.renderHelp(ctx);
       if (command === 'status' || command === 'scan') return this.renderScanStatus(ctx);
       if (command === 'stop') return ctx.reply('⏹ Notifications stopped. Type /start to resume.');
+    });
+
+    // 5b. Quick XAUUSD Scalping Menu & Actions
+    this.bot.action('menu_quick_xauusd', async (ctx) => {
+      await ctx.answerCbQuery();
+      await this.renderQuickXauusdMenu(ctx);
+    });
+
+    this.bot.action('toggle_quick_xauusd', async (ctx) => {
+      const tgUser = ctx.from;
+      const dbUser = await prisma.telegramUser.findUnique({
+        where: { telegramId: BigInt(tgUser.id) },
+        include: { user: { include: { preferences: true } } },
+      });
+
+      if (!dbUser) return ctx.reply('Please register first by entering your Access Code X10H.');
+
+      // Strict Server-Side Premium Entitlement Check
+      const isPremium = dbUser.user.accessType === 'PREMIUM';
+      if (!isPremium) {
+        await ctx.answerCbQuery('Premium Required');
+        const text = `⚡ Quick XAUUSD Scalping is available for Premium members only.\n\nUpgrade to Premium to activate the 24/5 XAUUSD scalping analyzer.`;
+        return this.cleanAndReply(
+          ctx,
+          text,
+          Markup.inlineKeyboard([
+            [Markup.button.callback('💎 Upgrade to Premium Plans', 'menu_subscribe')],
+            [Markup.button.callback('⬅️ Back to Menu', 'menu_help')],
+          ])
+        );
+      }
+
+      const currentVal = dbUser.user.preferences?.quickXauusdEnabled || false;
+      const newVal = !currentVal;
+
+      await prisma.userPreference.upsert({
+        where: { userId: dbUser.userId },
+        update: { quickXauusdEnabled: newVal },
+        create: { userId: dbUser.userId, quickXauusdEnabled: newVal },
+      });
+
+      await ctx.answerCbQuery(`Quick XAUUSD Scalping: ${newVal ? 'ON' : 'OFF'}`);
+      await this.renderQuickXauusdMenu(ctx);
+    });
+
+    this.bot.action('quick_xauusd_history', async (ctx) => {
+      await ctx.answerCbQuery();
+      const tgUser = ctx.from;
+      const dbUser = await prisma.telegramUser.findUnique({
+        where: { telegramId: BigInt(tgUser.id) },
+        include: { user: true },
+      });
+
+      if (!dbUser) return ctx.reply('Please register first by entering your Access Code X10H.');
+
+      const quickSignals = await prisma.signal.findMany({
+        where: { signalMode: 'QUICK_XAUUSD' },
+        orderBy: { createdAt: 'desc' },
+        take: 10,
+      });
+
+      if (quickSignals.length === 0) {
+        return this.cleanAndReply(
+          ctx,
+          '📜 QUICK XAUUSD SIGNAL HISTORY\n━━━━━━━━━━━━━━━━━━\n\nNo Quick XAUUSD signals generated yet. 24/5 analyzer is scanning.',
+          Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Quick Scalping', 'menu_quick_xauusd')]])
+        );
+      }
+
+      let histText = `📜 RECENT QUICK XAUUSD SIGNALS (${quickSignals.length})\n━━━━━━━━━━━━━━━━━━\n\n`;
+      for (const qs of quickSignals) {
+        histText += `• ${qs.direction} @ ${qs.entryMin.toFixed(2)} - ${qs.entryMax.toFixed(2)}\n  Result: ${qs.result || qs.status} | Quality: ${qs.qualityScore}/100\n  Time: ${qs.createdAt.toISOString().replace('T', ' ').slice(0, 16)} UTC\n\n`;
+      }
+
+      await this.cleanAndReply(
+        ctx,
+        histText,
+        Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Quick Scalping', 'menu_quick_xauusd')]])
+      );
+    });
+
+    this.bot.action('quick_xauusd_perf', async (ctx) => {
+      await ctx.answerCbQuery();
+      const totalQuick = await prisma.signal.count({ where: { signalMode: 'QUICK_XAUUSD' } });
+      const wins = await prisma.signal.count({ where: { signalMode: 'QUICK_XAUUSD', result: 'WIN' } });
+      const losses = await prisma.signal.count({ where: { signalMode: 'QUICK_XAUUSD', result: 'LOSS' } });
+      const breakeven = await prisma.signal.count({ where: { signalMode: 'QUICK_XAUUSD', result: 'BREAKEVEN' } });
+
+      const entered = wins + losses + breakeven;
+      const winRate = entered > 0 ? ((wins / entered) * 100).toFixed(1) : 'N/A';
+
+      const perfText = `⚡ QUICK XAUUSD PERFORMANCE\n━━━━━━━━━━━━━━━━━━\nTotal Signals: ${totalQuick}\n\n• Wins: ${wins}\n• Losses: ${losses}\n• Breakeven: ${breakeven}\n• Win Rate (Entered Trades): ${winRate}%\n\nℹ️ Audited strictly from verified database historical results.`;
+
+      await this.cleanAndReply(
+        ctx,
+        perfText,
+        Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back to Quick Scalping', 'menu_quick_xauusd')]])
+      );
     });
 
     // 6. Interactive Action Handlers
@@ -1295,15 +1397,86 @@ Total Signal Opportunities: ${totalSignals}
     const minScore = prefs?.minQualityScore || 75;
     const newsFilter = prefs?.newsFilterOn ? 'ON' : 'OFF';
     const muslimAct = prefs?.muslimActivities ? 'ON' : 'OFF';
+    const quickXau = prefs?.quickXauusdEnabled ? 'ON' : 'OFF';
 
-    const text = `⚙️ USER SETTINGS & PROFILE CUSTOMIZATION:\n\n• Current Language: ${lang.toUpperCase()}\n• Display Timezone: ${prefs?.timezone || 'UTC'}\n• Enabled Timeframes: ${timeframes}\n• Min Quality Score: ${minScore}/100\n• High-Impact News Filter: ${newsFilter}\n• Muslim Activities (Optional): ${muslimAct}\n• Official Channel: Joined @hikimaaipalace\n\nSelect an option below to customize your profile settings:`;
+    const text = `⚙️ USER SETTINGS & PROFILE CUSTOMIZATION:\n\n• Current Language: ${lang.toUpperCase()}\n• Display Timezone: ${prefs?.timezone || 'UTC'}\n• Enabled Timeframes: ${timeframes}\n• Min Quality Score: ${minScore}/100\n• ⚡ Quick XAUUSD Scalping: ${quickXau}\n• High-Impact News Filter: ${newsFilter}\n• Muslim Activities (Optional): ${muslimAct}\n• Official Channel: Joined @hikimaaipalace\n\nSelect an option below to customize your profile settings:`;
 
     await this.cleanAndReply(ctx, text, Markup.inlineKeyboard([
       [Markup.button.callback('🌐 Language', 'edit_lang'), Markup.button.callback('🕒 Timezone', 'edit_tz')],
       [Markup.button.callback('⏱ Timeframes', 'edit_timeframes'), Markup.button.callback('⭐ Quality Score', 'edit_min_score')],
+      [Markup.button.callback(`⚡ Quick XAUUSD (${quickXau})`, 'menu_quick_xauusd')],
       [Markup.button.callback('🔔 Toggle News Filter', 'toggle_news_filter')],
       [Markup.button.callback(`🌙 Muslim Activities (${muslimAct})`, 'toggle_muslim_activities')],
     ]));
+  }
+
+  private async renderQuickXauusdMenu(ctx: any) {
+    const tgUser = ctx.from;
+    const dbUser = await prisma.telegramUser.findUnique({
+      where: { telegramId: BigInt(tgUser.id) },
+      include: { user: { include: { preferences: true } } },
+    });
+
+    if (!dbUser) return ctx.reply('Please register first by entering your Access Code X10H.');
+
+    const isPremium = dbUser.user.accessType === 'PREMIUM';
+    if (!isPremium) {
+      const text = `⚡ Quick XAUUSD Scalping is available for Premium members only.\n\nUpgrade to Premium to activate the 24/5 XAUUSD scalping analyzer.`;
+      return this.cleanAndReply(
+        ctx,
+        text,
+        Markup.inlineKeyboard([
+          [Markup.button.callback('💎 Upgrade to Premium Plans', 'buy_MONTHLY')],
+          [Markup.button.callback('⬅️ Back to Menu', 'menu_help')],
+        ])
+      );
+    }
+
+    const isQuickOn = dbUser.user.preferences?.quickXauusdEnabled || false;
+    const statusText = isQuickOn ? '🟢 ACTIVE' : '🔴 INACTIVE';
+    const toggleBtnLabel = isQuickOn ? '⚡ Quick XAUUSD: 🟢 ON (Click to Turn OFF)' : '⚡ Quick XAUUSD: 🔴 OFF (Click to Turn ON)';
+
+    // Find active Quick XAUUSD signal for this user
+    const userNotifs = await prisma.notification.findMany({
+      where: { userId: dbUser.userId },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+    });
+
+    let activeSignalDesc = '🟢 No active signal (Scanner searching for setups)';
+    for (const notif of userNotifs) {
+      const sig = await prisma.signal.findUnique({ where: { id: notif.title } });
+      if (sig && sig.signalMode === 'QUICK_XAUUSD' && !sig.closedAt) {
+        activeSignalDesc = `🟡 Signal #${sig.id.slice(0, 8)} ACTIVE (${sig.direction} @ ${sig.entryMin.toFixed(2)} - ${sig.entryMax.toFixed(2)})`;
+        break;
+      }
+    }
+
+    const screenText = `━━━━━━━━━━━━━━━━━━
+⚡ QUICK XAUUSD SCALPING
+
+🟡 GOLD ONLY
+⏱ 24/5 ANALYZER
+👑 PREMIUM ONLY
+
+Status:
+${statusText}
+
+Analyzer:
+🔍 Scanning XAUUSD (M5 Confluence Engine)
+
+Signal:
+${activeSignalDesc}
+━━━━━━━━━━━━━━━━━━`;
+
+    const keyboard = Markup.inlineKeyboard([
+      [Markup.button.callback(toggleBtnLabel, 'toggle_quick_xauusd')],
+      [Markup.button.callback('📜 Quick Signal History', 'quick_xauusd_history')],
+      [Markup.button.callback('📊 Quick Performance', 'quick_xauusd_perf')],
+      [Markup.button.callback('⬅️ Back to Settings', 'menu_settings')],
+    ]);
+
+    await this.cleanAndReply(ctx, screenText, keyboard);
   }
 
   private async renderHelp(ctx: any) {

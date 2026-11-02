@@ -66,6 +66,8 @@ export class SignalMonitoringWorker {
     const hasReachedEntry = prevStatus !== 'SENT' || monitoringRecord?.isNotifiedEntry === true;
     const hasHitAnyTp = monitoringRecord?.isNotifiedTp1 === true || monitoringRecord?.isNotifiedTp2 === true || monitoringRecord?.isNotifiedTp3 === true;
 
+    const isQuickXau = signal.signalMode === 'QUICK_XAUUSD';
+
     // 1. Entry Reached Check
     if (prevStatus === 'SENT' || prevStatus === 'ACTIVE') {
       const isPriceInZone = isBuy
@@ -74,7 +76,11 @@ export class SignalMonitoringWorker {
 
       if (isPriceInZone) {
         newStatus = 'ENTRY_REACHED';
-        notificationMsg = `🎯 ${signal.marketSymbol.symbol} ENTRY ZONE REACHED at ${currentPrice.toFixed(2)}. Signal active.`;
+        if (isQuickXau) {
+          notificationMsg = `🟢 XAUUSD ENTRY REACHED\n\nEntry zone:\n${signal.entryMin.toFixed(2)} – ${signal.entryMax.toFixed(2)}\n\nStatus:\nACTIVE MONITORING`;
+        } else {
+          notificationMsg = `🎯 ${signal.marketSymbol.symbol} ENTRY ZONE REACHED at ${currentPrice.toFixed(2)}. Signal active.`;
+        }
       }
     }
 
@@ -84,14 +90,26 @@ export class SignalMonitoringWorker {
       if (!hasReachedEntry) {
         // Price hit SL BEFORE entry was ever reached -> Invalidated, NOT a loss!
         newStatus = 'INVALIDATED';
-        notificationMsg = `⚪ ${signal.marketSymbol.symbol} SETUP INVALIDATED: Price broke stop loss before entry zone was reached. Setup cancelled.`;
+        if (isQuickXau) {
+          notificationMsg = `⚠️ XAUUSD SETUP INVALIDATED\n\nReason:\nPrice broke invalidation level ${signal.stopLoss.toFixed(2)} before entry zone was filled. Setup cancelled.`;
+        } else {
+          notificationMsg = `⚪ ${signal.marketSymbol.symbol} SETUP INVALIDATED: Price broke stop loss before entry zone was reached. Setup cancelled.`;
+        }
       } else {
         newStatus = 'SL_HIT';
         if (hasHitAnyTp) {
-          notificationMsg = `🛡 ${signal.marketSymbol.symbol} STOP LOSS REACHED AT BREAKEVEN (${currentPrice.toFixed(2)}). Trade closed with partial TP profits secured!`;
+          if (isQuickXau) {
+            notificationMsg = `🟢 XAUUSD BREAK-EVEN\n\nPrice returned to entry (${signal.entryMin.toFixed(2)}). Trade closed with secured partial profits!`;
+          } else {
+            notificationMsg = `🛡 ${signal.marketSymbol.symbol} STOP LOSS REACHED AT BREAKEVEN (${currentPrice.toFixed(2)}). Trade closed with partial TP profits secured!`;
+          }
         } else {
-          notificationMsg = `🔴 ${signal.marketSymbol.symbol} STOP LOSS HIT at ${currentPrice.toFixed(2)}. Setup invalidated.`;
-          recoveryMsg = `🔎 RECOVERY ANALYSIS for ${signal.marketSymbol.symbol}:\nPrevious ${signal.direction} setup failed. Current structure invalidated. Monitoring for new structural confirmation before re-entry. (No automatic revenge trade).`;
+          if (isQuickXau) {
+            notificationMsg = `🛑 XAUUSD STOP LOSS HIT\n\nEntry:\n${signal.entryMin.toFixed(2)} – ${signal.entryMax.toFixed(2)}\n\nSL:\n${signal.stopLoss.toFixed(2)}\n\nReason:\nStructural invalidation point breached at ${currentPrice.toFixed(2)}.`;
+          } else {
+            notificationMsg = `🔴 ${signal.marketSymbol.symbol} STOP LOSS HIT at ${currentPrice.toFixed(2)}. Setup invalidated.`;
+            recoveryMsg = `🔎 RECOVERY ANALYSIS for ${signal.marketSymbol.symbol}:\nPrevious ${signal.direction} setup failed. Current structure invalidated. Monitoring for new structural confirmation before re-entry. (No automatic revenge trade).`;
+          }
         }
       }
     }
@@ -104,13 +122,25 @@ export class SignalMonitoringWorker {
 
       if (isTp3) {
         newStatus = 'TP3_HIT';
-        notificationMsg = `🚀🚀🚀 ${signal.marketSymbol.symbol} FINAL TP3 TARGET HIT at ${currentPrice.toFixed(2)}! Trade closed in full profit.`;
+        if (isQuickXau) {
+          notificationMsg = `🏆 XAUUSD TP3 HIT\n\nPrice: ${currentPrice.toFixed(2)}\n\nSignal completed. Full target reached!`;
+        } else {
+          notificationMsg = `🚀🚀🚀 ${signal.marketSymbol.symbol} FINAL TP3 TARGET HIT at ${currentPrice.toFixed(2)}! Trade closed in full profit.`;
+        }
       } else if (isTp2 && prevStatus !== 'TP2_HIT') {
         newStatus = 'TP2_HIT';
-        notificationMsg = `✅✅ ${signal.marketSymbol.symbol} TP2 TARGET HIT at ${currentPrice.toFixed(2)}. SL moved to breakeven/locking profits.`;
+        if (isQuickXau) {
+          notificationMsg = `🎯 XAUUSD TP2 HIT\n\nPrice: ${currentPrice.toFixed(2)}\n\nRemaining target:\nTP3 (${signal.tp3.toFixed(2)})`;
+        } else {
+          notificationMsg = `✅✅ ${signal.marketSymbol.symbol} TP2 TARGET HIT at ${currentPrice.toFixed(2)}. SL moved to breakeven/locking profits.`;
+        }
       } else if (isTp1 && prevStatus !== 'TP1_HIT' && prevStatus !== 'TP2_HIT') {
         newStatus = 'TP1_HIT';
-        notificationMsg = `✅ ${signal.marketSymbol.symbol} TP1 TARGET HIT at ${currentPrice.toFixed(2)}. Suggested management: Move SL to entry / manage risk.`;
+        if (isQuickXau) {
+          notificationMsg = `🎯 XAUUSD TP1 HIT\n\nPrice: ${currentPrice.toFixed(2)}\n\nRemaining targets:\nTP2 (${signal.tp2.toFixed(2)})\nTP3 (${signal.tp3.toFixed(2)})`;
+        } else {
+          notificationMsg = `✅ ${signal.marketSymbol.symbol} TP1 TARGET HIT at ${currentPrice.toFixed(2)}. Suggested management: Move SL to entry / manage risk.`;
+        }
       }
     }
 
@@ -120,13 +150,21 @@ export class SignalMonitoringWorker {
     // 4a. Pending setup expiration (4h without entry)
     if (prevStatus === 'SENT' && hoursSinceCreation > 4 && !isSlHit && newStatus === prevStatus) {
       newStatus = 'EXPIRED';
-      notificationMsg = `⚪ ${signal.marketSymbol.symbol} SIGNAL EXPIRED: Entry zone not reached within 4 hours.`;
+      if (isQuickXau) {
+        notificationMsg = `⌛ XAUUSD SIGNAL EXPIRED\n\nReason:\nSetup no longer valid (entry not filled within 4 hours).`;
+      } else {
+        notificationMsg = `⚪ ${signal.marketSymbol.symbol} SIGNAL EXPIRED: Entry zone not reached within 4 hours.`;
+      }
     }
 
     // 4b. Active trade expiration (24h max active trade duration)
     if (hasReachedEntry && hoursSinceCreation > 24 && !isSlHit && newStatus === prevStatus) {
       newStatus = 'EXPIRED';
-      notificationMsg = `⚪ ${signal.marketSymbol.symbol} SIGNAL CLOSED: Active 24-hour monitoring limit reached. Position auto-closed.`;
+      if (isQuickXau) {
+        notificationMsg = `⌛ XAUUSD SIGNAL EXPIRED\n\nReason:\nActive monitoring duration limit reached. Position auto-closed.`;
+      } else {
+        notificationMsg = `⚪ ${signal.marketSymbol.symbol} SIGNAL CLOSED: Active 24-hour monitoring limit reached. Position auto-closed.`;
+      }
     }
 
     // If state changed, verify this event hasn't already been emitted for this signal ID
